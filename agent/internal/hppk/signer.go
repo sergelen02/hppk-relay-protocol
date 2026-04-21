@@ -2,12 +2,12 @@ package hppk
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+
+	hapi "github.com/sergelen02/HPPK_2/pkg/hppkapi"
 )
 
 type SignerConfig struct {
@@ -23,16 +23,13 @@ type Signer struct {
 	enableVerify   bool
 	strictKeyCheck bool
 
-	publicKey  []byte
-	secretKey  []byte
-	pubKeyHash string
+	publicKeyRaw []byte
+	secretKeyRaw []byte
+
+	publicKey *hapi.Public
+	secretKey *hapi.Secret
 }
 
-// NewSigner는 현재 "어댑터 + placeholder" 구현이다.
-// 실제 HPPK 라이브러리로 교체할 때는 아래 3개만 바꾸면 된다.
-//  1. Sign
-//  2. Verify
-//  3. key loading/decoding
 func NewSigner(cfg SignerConfig) (*Signer, error) {
 	if strings.TrimSpace(cfg.PublicKeyPath) == "" {
 		return nil, errors.New("public key path is required")
@@ -41,37 +38,43 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 		return nil, errors.New("secret key path is required")
 	}
 
-	pub, err := os.ReadFile(cfg.PublicKeyPath)
+	pubRaw, err := os.ReadFile(cfg.PublicKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read public key file: %w", err)
 	}
-	sec, err := os.ReadFile(cfg.SecretKeyPath)
+	secRaw, err := os.ReadFile(cfg.SecretKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("read secret key file: %w", err)
 	}
 
-	pub = bytes.TrimSpace(pub)
-	sec = bytes.TrimSpace(sec)
+	pubRaw = bytes.TrimSpace(pubRaw)
+	secRaw = bytes.TrimSpace(secRaw)
 
-	if len(pub) == 0 {
+	if len(pubRaw) == 0 {
 		return nil, errors.New("public key file is empty")
 	}
-	if len(sec) == 0 {
+	if len(secRaw) == 0 {
 		return nil, errors.New("secret key file is empty")
 	}
 
-	pubHash := sha256.Sum256(pub)
-
-	s := &Signer{
-		algorithmName:  strings.TrimSpace(cfg.AlgorithmName),
-		enableVerify:   cfg.EnableVerify,
-		strictKeyCheck: cfg.StrictKeyCheck,
-		publicKey:      pub,
-		secretKey:      sec,
-		pubKeyHash:     "0x" + hex.EncodeToString(pubHash[:]),
+	pk, err := hapi.DecodePublicJSON(pubRaw)
+	if err != nil {
+		return nil, fmt.Errorf("decode public key: %w", err)
+	}
+	sk, err := hapi.DecodeSecretJSON(secRaw)
+	if err != nil {
+		return nil, fmt.Errorf("decode secret key: %w", err)
 	}
 
-	return s, nil
+	return &Signer{
+		algorithmName:  cfg.AlgorithmName,
+		enableVerify:   cfg.EnableVerify,
+		strictKeyCheck: cfg.StrictKeyCheck,
+		publicKeyRaw:   pubRaw,
+		secretKeyRaw:   secRaw,
+		publicKey:      pk,
+		secretKey:      sk,
+	}, nil
 }
 
 func (s *Signer) Algorithm() string {
@@ -81,69 +84,49 @@ func (s *Signer) Algorithm() string {
 	return s.algorithmName
 }
 
-func (s *Signer) PublicKeyHash() (string, error) {
-	if s == nil {
-		return "", errors.New("signer is nil")
-	}
-	return s.pubKeyHash, nil
-}
-
 func (s *Signer) PublicKeyBytes() ([]byte, error) {
 	if s == nil {
 		return nil, errors.New("signer is nil")
 	}
-	out := make([]byte, len(s.publicKey))
-	copy(out, s.publicKey)
+	out := make([]byte, len(s.publicKeyRaw))
+	copy(out, s.publicKeyRaw)
 	return out, nil
 }
 
-func (s *Signer) SecretKeyBytes() ([]byte, error) {
+func (s *Signer) PublicKeyHash() (string, error) {
 	if s == nil {
-		return nil, errors.New("signer is nil")
+		return "", errors.New("signer is nil")
 	}
-	out := make([]byte, len(s.secretKey))
-	copy(out, s.secretKey)
-	return out, nil
+	// 공개키 원문(JSON)의 해시를 식별자로 사용
+	return ethKeccak256Hex(s.publicKeyRaw), nil
 }
 
-// Sign은 현재 placeholder 구현이다.
-// 현재 규칙:
-//
-//	signature = sha256(secretKey || msg)
-//
-// 실제 HPPK 라이브러리 연결 시:
-//
-//	sig, err := realhppk.Sign(sk, msg)
-//
-// 로 교체해야 한다.
 func (s *Signer) Sign(msg []byte) ([]byte, error) {
 	if s == nil {
 		return nil, errors.New("signer is nil")
+	}
+	if s.secretKey == nil {
+		return nil, errors.New("secret key is nil")
+	}
+	if s.publicKey == nil {
+		return nil, errors.New("public key is nil")
 	}
 	if len(msg) == 0 {
 		return nil, errors.New("msg is empty")
 	}
 
-	h := sha256.New()
-	h.Write(s.secretKey)
-	h.Write(msg)
-	sum := h.Sum(nil)
+	sig, err := hapi.SignWithPK(s.secretKey, s.publicKey, msg)
+	if err != nil {
+		return nil, fmt.Errorf("hppk sign: %w", err)
+	}
 
-	return sum, nil
+	out, err := hapi.EncodeSignatureJSON(sig)
+	if err != nil {
+		return nil, fmt.Errorf("encode signature json: %w", err)
+	}
+	return out, nil
 }
 
-// Verify는 현재 placeholder 구현이다.
-// 현재 규칙:
-//
-//	expected = sha256(secretKey || msg)
-//	expected == sig
-//
-// 이 구현은 진짜 공개키 검증이 아니라 "개발 골격용"이다.
-// 실제 HPPK 라이브러리 연결 시:
-//
-//	ok := realhppk.Verify(pubKey, msg, sig)
-//
-// 로 반드시 교체해야 한다.
 func (s *Signer) Verify(pubKey []byte, msg []byte, sig []byte) (bool, error) {
 	if s == nil {
 		return false, errors.New("signer is nil")
@@ -151,24 +134,30 @@ func (s *Signer) Verify(pubKey []byte, msg []byte, sig []byte) (bool, error) {
 	if !s.enableVerify {
 		return true, nil
 	}
+	if len(pubKey) == 0 {
+		return false, errors.New("pubKey is empty")
+	}
 	if len(msg) == 0 {
 		return false, errors.New("msg is empty")
 	}
 	if len(sig) == 0 {
 		return false, errors.New("sig is empty")
 	}
-	if len(pubKey) == 0 {
-		return false, errors.New("pubKey is empty")
+
+	if s.strictKeyCheck && !bytes.Equal(bytes.TrimSpace(pubKey), bytes.TrimSpace(s.publicKeyRaw)) {
+		return false, errors.New("public key mismatch against configured key")
 	}
 
-	if s.strictKeyCheck && !bytes.Equal(bytes.TrimSpace(pubKey), bytes.TrimSpace(s.publicKey)) {
-		return false, errors.New("public key mismatch against local configured public key")
-	}
-
-	expected, err := s.Sign(msg)
+	pk, err := hapi.DecodePublicJSON(bytes.TrimSpace(pubKey))
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("decode verify public key: %w", err)
 	}
 
-	return bytes.Equal(expected, sig), nil
+	parsedSig, err := hapi.DecodeSignatureJSON(bytes.TrimSpace(sig))
+	if err != nil {
+		return false, fmt.Errorf("decode verify signature: %w", err)
+	}
+
+	ok := hapi.Verify(pk, msg, parsedSig)
+	return ok, nil
 }

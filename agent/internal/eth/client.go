@@ -3,7 +3,6 @@ package eth
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math/big"
@@ -239,7 +238,6 @@ func (c *Client) SubmitHop(ctx context.Context, req SubmitHopRequest) error {
 
 	gasLimit, err := c.ec.EstimateGas(ctx, msg)
 	if err != nil {
-		// estimate 실패 시 최소 fallback
 		gasLimit = 1_500_000
 	}
 
@@ -324,14 +322,12 @@ func hexToBytes32(s string) [32]byte {
 
 func hashMetaToBytes32(meta map[string]string) [32]byte {
 	var out [32]byte
-
 	if len(meta) == 0 {
 		return out
 	}
 
-	canonical := canonicalMeta(meta)
-	sum := sha256.Sum256([]byte(canonical))
-	copy(out[:], sum[:])
+	hash := crypto.Keccak256Hash([]byte(canonicalMeta(meta)))
+	copy(out[:], hash.Bytes())
 	return out
 }
 

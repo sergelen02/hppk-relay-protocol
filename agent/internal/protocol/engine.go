@@ -2,13 +2,16 @@ package protocol
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/client"
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/eth"
@@ -123,11 +126,12 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 		return fmt.Errorf("read payload file: %w", err)
 	}
 
+	now := time.Now().UTC().Unix()
 	payloadHash := hashBytesHex(payload)
 	initialPrev := zeroHashHex()
 
 	packet := RelayPacket{
-		SessionID:     req.SessionID,
+		SessionID:     normalizeHex(req.SessionID),
 		Step:          1,
 		From:          e.myAddress,
 		To:            nextHop(req.RouteAddresses, 0),
@@ -135,8 +139,8 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 		PayloadHash:   payloadHash,
 		PrevChainHash: initialPrev,
 		LocalNonce:    1,
-		Meta:          req.Meta,
-		TimestampUnix: time.Now().UTC().Unix(),
+		Meta:          copyMap(req.Meta),
+		TimestampUnix: now,
 	}
 
 	newChainHash, sig, pubKey, err := e.signPacket(packet)
@@ -157,11 +161,13 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 		}
 	}
 
-	e.logger.Info("initial session relayed",
-		"session_id", req.SessionID,
-		"step", packet.Step,
-		"to", packet.To,
-	)
+	if e.logger != nil {
+		e.logger.Info("initial session relayed",
+			"session_id", req.SessionID,
+			"step", packet.Step,
+			"to", packet.To,
+		)
+	}
 	return nil
 }
 
@@ -185,13 +191,13 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 
 	nextStep := pkt.Step + 1
 	newPacket := RelayPacket{
-		SessionID:     pkt.SessionID,
+		SessionID:     normalizeHex(pkt.SessionID),
 		Step:          nextStep,
 		From:          e.myAddress,
 		To:            e.resolveNextHop(pkt),
 		Payload:       pkt.Payload,
-		PayloadHash:   pkt.PayloadHash,
-		PrevChainHash: pkt.ChainHash,
+		PayloadHash:   normalizeHex(pkt.PayloadHash),
+		PrevChainHash: normalizeHex(pkt.ChainHash),
 		LocalNonce:    pkt.LocalNonce + 1,
 		Meta:          copyMap(pkt.Meta),
 		TimestampUnix: time.Now().UTC().Unix(),
@@ -218,12 +224,14 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 		forwarded = true
 	}
 
-	e.logger.Info("relay processed",
-		"session_id", pkt.SessionID,
-		"incoming_step", pkt.Step,
-		"new_step", newPacket.Step,
-		"forwarded", forwarded,
-	)
+	if e.logger != nil {
+		e.logger.Info("relay processed",
+			"session_id", pkt.SessionID,
+			"incoming_step", pkt.Step,
+			"new_step", newPacket.Step,
+			"forwarded", forwarded,
+		)
+	}
 
 	return &ProcessRelayResponse{
 		OK:           true,
@@ -262,6 +270,9 @@ func (e *Engine) validateIncomingPacket(pkt RelayPacket) error {
 	if strings.TrimSpace(pkt.PayloadHash) == "" {
 		return errors.New("payload_hash is required")
 	}
+	if strings.TrimSpace(pkt.PrevChainHash) == "" {
+		return errors.New("prev_chain_hash is required")
+	}
 	if strings.TrimSpace(pkt.ChainHash) == "" {
 		return errors.New("chain_hash is required")
 	}
@@ -275,7 +286,7 @@ func (e *Engine) validateIncomingPacket(pkt RelayPacket) error {
 }
 
 func (e *Engine) verifyPreviousProof(pkt RelayPacket) error {
-	recomputed := computeChainHash(
+	recomputed, err := computeChainHash(
 		pkt.SessionID,
 		pkt.Step,
 		normalizeHex(pkt.From),
@@ -283,8 +294,12 @@ func (e *Engine) verifyPreviousProof(pkt RelayPacket) error {
 		pkt.PayloadHash,
 		pkt.PrevChainHash,
 		pkt.LocalNonce,
+		pkt.TimestampUnix,
 		pkt.Meta,
 	)
+	if err != nil {
+		return fmt.Errorf("recompute chain hash: %w", err)
+	}
 
 	if !equalHex(recomputed, pkt.ChainHash) {
 		return fmt.Errorf("chain hash mismatch: recomputed=%s packet=%s", recomputed, pkt.ChainHash)
@@ -302,13 +317,9 @@ func (e *Engine) verifyPreviousProof(pkt RelayPacket) error {
 }
 
 func (e *Engine) resolveNextHop(pkt RelayPacket) string {
-	// 가장 단순한 골격:
-	// 마지막 agent면 빈 문자열 반환.
-	// 이후 route 전체를 meta에 넣거나 온체인 조회와 연결해 확장 가능.
 	if e.nextAgentURL == "" {
 		return ""
 	}
-	// 현재 골격에서는 주소는 meta["next_address"]에서 가져오도록 단순화.
 	if pkt.Meta != nil {
 		if v := normalizeHex(pkt.Meta["next_address"]); v != "" && v != e.myAddress {
 			return v
@@ -318,7 +329,7 @@ func (e *Engine) resolveNextHop(pkt RelayPacket) string {
 }
 
 func (e *Engine) signPacket(pkt RelayPacket) (chainHashHex string, sig []byte, pubKey []byte, err error) {
-	chainHashHex = computeChainHash(
+	chainHashHex, err = computeChainHash(
 		pkt.SessionID,
 		pkt.Step,
 		normalizeHex(pkt.From),
@@ -326,8 +337,12 @@ func (e *Engine) signPacket(pkt RelayPacket) (chainHashHex string, sig []byte, p
 		pkt.PayloadHash,
 		pkt.PrevChainHash,
 		pkt.LocalNonce,
+		pkt.TimestampUnix,
 		pkt.Meta,
 	)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("compute chain hash: %w", err)
+	}
 
 	msg := mustDecodeHex(chainHashHex)
 
@@ -364,10 +379,7 @@ func (e *Engine) submitOnChain(ctx context.Context, pkt RelayPacket) error {
 		Meta:          pkt.Meta,
 	}
 
-	if err := e.ethClient.SubmitHop(ctx, req); err != nil {
-		return err
-	}
-	return nil
+	return e.ethClient.SubmitHop(ctx, req)
 }
 
 func nextHop(route []string, idx int) string {
@@ -385,61 +397,44 @@ func computeChainHash(
 	payloadHash string,
 	prevChainHash string,
 	localNonce uint64,
+	timestampUnix int64,
 	meta map[string]string,
-) string {
-	// 지금은 안정적인 골격을 위해 간단한 canonical string 후 sha256 사용.
-	// 실제 배포/실험에서는 Solidity abi.encode(...)와 동일한 Keccak256로 반드시 통일해야 함.
-	canonical := fmt.Sprintf(
-		"session=%s|step=%d|from=%s|to=%s|payload_hash=%s|prev_chain_hash=%s|local_nonce=%d|meta=%s",
-		sessionID,
-		step,
-		strings.ToLower(from),
-		strings.ToLower(to),
-		strings.ToLower(payloadHash),
-		strings.ToLower(prevChainHash),
-		localNonce,
-		canonicalMeta(meta),
+) (string, error) {
+	metaHash := hashMetaToBytes32(meta)
+
+	args := abi.Arguments{
+		{Type: mustABIType("bytes32")},
+		{Type: mustABIType("uint256")},
+		{Type: mustABIType("address")},
+		{Type: mustABIType("address")},
+		{Type: mustABIType("bytes32")},
+		{Type: mustABIType("bytes32")},
+		{Type: mustABIType("uint256")},
+		{Type: mustABIType("uint256")},
+		{Type: mustABIType("bytes32")},
+	}
+
+	encoded, err := args.Pack(
+		common.HexToHash(normalizeHex(sessionID)),
+		uint256FromInt(step),
+		common.HexToAddress(normalizeHex(from)),
+		common.HexToAddress(normalizeHex(to)),
+		common.HexToHash(normalizeHex(payloadHash)),
+		common.HexToHash(normalizeHex(prevChainHash)),
+		uint256FromUint64(localNonce),
+		uint256FromInt64(timestampUnix),
+		metaHash,
 	)
-	sum := sha256.Sum256([]byte(canonical))
-	return "0x" + hex.EncodeToString(sum[:])
-}
+	if err != nil {
+		return "", err
+	}
 
-func canonicalMeta(meta map[string]string) string {
-	if len(meta) == 0 {
-		return ""
-	}
-	// deterministic ordering을 위해 간단 정렬
-	keys := make([]string, 0, len(meta))
-	for k := range meta {
-		keys = append(keys, k)
-	}
-	sortStrings(keys)
-
-	var b strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		b.WriteString(k)
-		b.WriteString("=")
-		b.WriteString(meta[k])
-	}
-	return b.String()
-}
-
-func sortStrings(a []string) {
-	for i := 0; i < len(a); i++ {
-		for j := i + 1; j < len(a); j++ {
-			if a[j] < a[i] {
-				a[i], a[j] = a[j], a[i]
-			}
-		}
-	}
+	hash := ethcrypto.Keccak256Hash(encoded)
+	return hash.Hex(), nil
 }
 
 func hashBytesHex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return "0x" + hex.EncodeToString(sum[:])
+	return ethcrypto.Keccak256Hash(b).Hex()
 }
 
 func zeroHashHex() string {
@@ -480,4 +475,85 @@ func copyMap(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func canonicalMeta(meta map[string]string) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(meta))
+	for k := range meta {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(k)
+		b.WriteString("=")
+		b.WriteString(meta[k])
+	}
+	return b.String()
+}
+
+func hashMetaToBytes32(meta map[string]string) [32]byte {
+	var out [32]byte
+	if len(meta) == 0 {
+		return out
+	}
+	hash := ethcrypto.Keccak256Hash([]byte(canonicalMeta(meta)))
+	copy(out[:], hash.Bytes())
+	return out
+}
+
+func sortStrings(a []string) {
+	for i := 0; i < len(a); i++ {
+		for j := i + 1; j < len(a); j++ {
+			if a[j] < a[i] {
+				a[i], a[j] = a[j], a[i]
+			}
+		}
+	}
+}
+
+func mustABIType(t string) abi.Type {
+	typ, err := abi.NewType(t, "", nil)
+	if err != nil {
+		panic(err)
+	}
+	return typ
+}
+
+func uint256FromInt(v int) interface{} {
+	return newBigIntFromString(fmt.Sprintf("%d", v))
+}
+
+func uint256FromInt64(v int64) interface{} {
+	return newBigIntFromString(fmt.Sprintf("%d", v))
+}
+
+func uint256FromUint64(v uint64) interface{} {
+	return newBigIntFromString(fmt.Sprintf("%d", v))
+}
+
+func newBigIntFromString(s string) interface{} {
+	n := new(bigInt)
+	n.SetString(s, 10)
+	return n.Int
+}
+
+// big.Int import를 최소 변경으로 감싸기 위한 래퍼
+type bigInt struct {
+	Int *big.Int
+}
+
+func (b *bigInt) SetString(s string, base int) {
+	n, ok := new(big.Int).SetString(s, base)
+	if !ok {
+		n = big.NewInt(0)
+	}
+	b.Int = n
 }
