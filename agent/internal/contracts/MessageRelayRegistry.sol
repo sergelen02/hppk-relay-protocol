@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+interface IHPPKVerifier {
+    function verify(
+        bytes calldata pubKey,
+        bytes32 messageHash,
+        bytes calldata signature
+    ) external view returns (bool);
+}
+
 contract MessageRelayRegistry {
-    struct Session {
+    struct Session 
         bool exists;
         bool finished;
         bool valid;
@@ -30,6 +38,19 @@ contract MessageRelayRegistry {
     mapping(bytes32 => Session) private sessions;
     mapping(bytes32 => mapping(uint256 => HopRecord)) private hops;
 
+    mapping(address => bytes32) public registeredPubKeyHash;
+    mapping(bytes32 => mapping(address => mapping(uint256 => bool))) public usedNonce;
+
+    address public owner;
+    address public hppkVerifier;
+    bool public hppkVerificationEnabled;
+
+    uint256 public constant MAX_FUTURE_SKEW = 30 seconds;
+    uint256 public constant MAX_PAST_DELAY = 10 minutes;
+
+    event PubKeyRegistered(address indexed user, bytes32 indexed pubKeyHash);
+    event HPPKVerifierUpdated(address indexed verifier, bool enabled);
+
     event SessionCreated(
         bytes32 indexed sessionId,
         bytes32 indexed originPayloadHash,
@@ -56,6 +77,7 @@ contract MessageRelayRegistry {
         bytes32 finalChainHash
     );
 
+    error NotOwner();
     error SessionAlreadyExists();
     error SessionNotFound();
     error SessionAlreadyFinished();
@@ -65,11 +87,43 @@ contract MessageRelayRegistry {
     error InvalidTo();
     error InvalidPayloadHash();
     error InvalidPrevChainHash();
+    error InvalidChainHash();
     error HopAlreadyExists();
+    error PubKeyNotRegistered();
+    error PubKeyMismatch();
+    error NonceAlreadyUsed();
+    error InvalidTimestamp();
+    error HPPKVerifierNotSet();
+    error InvalidHPPKSignature();
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
 
     modifier onlyExistingSession(bytes32 sessionId) {
         if (!sessions[sessionId].exists) revert SessionNotFound();
         _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function setHPPKVerifier(address verifier, bool enabled) external onlyOwner {
+        hppkVerifier = verifier;
+        hppkVerificationEnabled = enabled;
+
+        emit HPPKVerifierUpdated(verifier, enabled);
+    }
+
+    function registerPubKey(bytes calldata pubKey) external {
+        require(pubKey.length > 0, "empty pubKey");
+
+        bytes32 pubKeyHash = keccak256(pubKey);
+        registeredPubKeyHash[msg.sender] = pubKeyHash;
+
+        emit PubKeyRegistered(msg.sender, pubKeyHash);
     }
 
     function createSession(
@@ -101,6 +155,32 @@ contract MessageRelayRegistry {
         emit SessionCreated(sessionId, originPayloadHash, route.length);
     }
 
+    function recomputeChainHash(
+        bytes32 sessionId,
+        uint256 step,
+        address from,
+        address to,
+        bytes32 payloadHash,
+        bytes32 prevChainHash,
+        uint256 localNonce,
+        uint256 timestampUnix,
+        bytes32 metaHash
+    ) public pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                sessionId,
+                step,
+                from,
+                to,
+                payloadHash,
+                prevChainHash,
+                localNonce,
+                timestampUnix,
+                metaHash
+            )
+        );
+    }
+
     function submitHop(
         bytes32 sessionId,
         uint256 step,
@@ -121,10 +201,7 @@ contract MessageRelayRegistry {
         if (step == 0) revert InvalidStep();
         if (hops[sessionId][step].exists) revert HopAlreadyExists();
 
-        // 순서 검증
         if (step != s.currentStep + 1) revert InvalidStep();
-
-        // route 검증
         if (step > s.route.length) revert InvalidStep();
 
         address expectedFrom = s.route[step - 1];
@@ -137,23 +214,39 @@ contract MessageRelayRegistry {
         if (from != expectedFrom) revert InvalidFrom();
         if (to != expectedTo) revert InvalidTo();
 
-        // 동일 payload 검증
         if (payloadHash != s.originPayloadHash) revert InvalidPayloadHash();
 
-        // prevChainHash 연결 검증
         if (step == 1) {
             if (prevChainHash != bytes32(0)) revert InvalidPrevChainHash();
         } else {
             if (prevChainHash != s.latestChainHash) revert InvalidPrevChainHash();
         }
 
-        // 여기서는 현재 ABI 일치와 저장 구조에 집중
-        // 실제 완전 검증 단계에서는 아래 추가 가능:
-        // 1) chainHash 재계산 검증
-        // 2) HPPK verify(precompile 또는 verifier contract)
-        // 3) pubKey 등록값과 일치 검증
-        // 4) timestamp 검증
-        // 5) localNonce 중복 검증
+        bytes32 recomputed = recomputeChainHash(
+            sessionId,
+            step,
+            from,
+            to,
+            payloadHash,
+            prevChainHash,
+            localNonce,
+            timestampUnix,
+            metaHash
+        );
+
+        if (chainHash != recomputed) revert InvalidChainHash();
+
+        bytes32 registeredHash = registeredPubKeyHash[from];
+        if (registeredHash == bytes32(0)) revert PubKeyNotRegistered();
+
+        bytes32 inputPubKeyHash = keccak256(pubKey);
+        if (inputPubKeyHash != registeredHash) revert PubKeyMismatch();
+
+        if (usedNonce[sessionId][from][localNonce]) revert NonceAlreadyUsed();
+        usedNonce[sessionId][from][localNonce] = true;
+
+        _validateTimestamp(timestampUnix);
+        _verifyHPPK(pubKey, chainHash, signature);
 
         hops[sessionId][step] = HopRecord({
             step: step,
@@ -190,12 +283,41 @@ contract MessageRelayRegistry {
             s.finished = true;
             s.valid = true;
 
-            emit SessionFinalized(
-                sessionId,
-                true,
-                step,
-                chainHash
-            );
+            emit SessionFinalized(sessionId, true, step, chainHash);
+        }
+    }
+
+    function _validateTimestamp(uint256 timestampUnix) internal view {
+        if (timestampUnix > block.timestamp + MAX_FUTURE_SKEW) {
+            revert InvalidTimestamp();
+        }
+
+        if (timestampUnix + MAX_PAST_DELAY < block.timestamp) {
+            revert InvalidTimestamp();
+        }
+    }
+
+    function _verifyHPPK(
+        bytes calldata pubKey,
+        bytes32 messageHash,
+        bytes calldata signature
+    ) internal view {
+        if (!hppkVerificationEnabled) {
+            return;
+        }
+
+        if (hppkVerifier == address(0)) {
+            revert HPPKVerifierNotSet();
+        }
+
+        bool ok = IHPPKVerifier(hppkVerifier).verify(
+            pubKey,
+            messageHash,
+            signature
+        );
+
+        if (!ok) {
+            revert InvalidHPPKSignature();
         }
     }
 
@@ -208,7 +330,7 @@ contract MessageRelayRegistry {
             bool finished,
             bool valid,
             bytes32 originPayloadHash,
-            bytes32 latestChainHash,
+            bytes32 latestChainHash_,
             uint256 currentStep,
             uint256 routeLength
         )
@@ -303,5 +425,17 @@ contract MessageRelayRegistry {
         returns (bytes32)
     {
         return sessions[sessionId].latestChainHash;
+    }
+
+    function getRegisteredPubKeyHash(address user) external view returns (bytes32) {
+        return registeredPubKeyHash[user];
+    }
+
+    function isNonceUsed(
+        bytes32 sessionId,
+        address user,
+        uint256 localNonce
+    ) external view returns (bool) {
+        return usedNonce[sessionId][user][localNonce];
     }
 }

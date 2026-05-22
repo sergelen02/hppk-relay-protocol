@@ -1,0 +1,71 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Go Build All",
+      "type": "shell",
+      "command": "go build ./...",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}",
+          "GOTOOLCHAIN": "local",
+          "GOSUMDB": "sum.golang.org"
+        }
+      },
+      "problemMatcher": ["$go"]
+    },
+
+    {
+      "label": "Go Test All",
+      "type": "shell",
+      "command": "go test ./... -v",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}",
+          "GOTOOLCHAIN": "local",
+          "GOSUMDB": "sum.golang.org"
+        }
+      },
+  "problemMatcher": ["$go"]
+    },
+
+    {
+      "label": "Run Relay Agent",
+      "type": "shell",
+      "command": "go run ./agent/cmd/agent",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}",
+          "GOTOOLCHAIN": "local",
+          "GOSUMDB": "sum.golang.org",
+          "STORE_PATH": "${workspaceFolder}/data/store.json",
+          "ETH_RPC_URL": "http://127.0.0.1:8545"
+        }
+      },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "Foundry Build",
+      "type": "shell",
+      "command": "forge build",
+      "options": {
+        "cwd": "${workspaceFolder}/solidity"
+      },
+ "problemMatcher": []
+    },
+
+    {
+      "label": "Foundry Test",
+      "type": "shell",
+      "command": "forge test -vvv",
+      "options": {
+        "cwd": "${workspaceFolder}/solidity"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
