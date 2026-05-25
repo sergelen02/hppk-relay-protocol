@@ -3,6 +3,7 @@
     // 기존 특성에 대한 설명을 보려면 가리킵니다.
     // 자세한 내용을 보려면 https://go.microsoft.com/fwlink/?linkid=830387을(를) 방문하세요.
 
+  
   "version": "0.2.0",
   "configurations": [
     {
@@ -16,7 +17,6 @@
         "GOTOOLCHAIN": "local",
         "GOSUMDB": "sum.golang.org",
         "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}",
-
         "AGENT_ADDR": "0x1111111111111111111111111111111111111111",
         "ETH_RPC_URL": "http://127.0.0.1:8545",
         "STORE_PATH": "${workspaceFolder}/data/store.json",
@@ -26,7 +26,7 @@
       "showLog": true,
       "trace": "verbose"
     },
-{
+    {
       "name": "Debug Store Package",
       "type": "go",
       "request": "launch",
@@ -41,7 +41,6 @@
       "showLog": true,
       "trace": "verbose"
     },
-
     {
       "name": "Debug Protocol Engine",
       "type": "go",
@@ -57,7 +56,7 @@
       "showLog": true,
       "trace": "verbose"
     },
-     {
+    {
       "name": "Attach Delve",
       "type": "go",
       "request": "attach",

@@ -217,6 +217,27 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 		return nil, fmt.Errorf("submit on chain: %w", err)
 	}
 
+	// Session Recovery: 온체인 제출까지 성공한 packet만 정상 상태로 저장
+	if e.store != nil {
+		if err := e.store.SetSessionState(store.SessionState{
+			SessionID:     newPacket.SessionID,
+			LastValidStep: uint64(newPacket.Step),
+			LastChainHash: newPacket.ChainHash,
+		}); err != nil {
+			return nil, fmt.Errorf("save session state: %w", err)
+		}
+
+		if newPacket.Step%10 == 0 {
+			if err := e.store.SetCheckpoint(store.SessionCheckpoint{
+				SessionID: newPacket.SessionID,
+				Step:      uint64(newPacket.Step),
+				ChainHash: newPacket.ChainHash,
+			}); err != nil {
+				return nil, fmt.Errorf("save checkpoint: %w", err)
+			}
+		}
+	}
+
 	forwarded := false
 	if newPacket.To != "" && e.nextAgentURL != "" && e.relayClient != nil {
 		if err := e.relayClient.Send(ctx, e.nextAgentURL, ProcessRelayRequest{Packet: newPacket}); err != nil {
