@@ -1,69 +1,20 @@
 {
-    // IntelliSense를 사용하여 가능한 특성에 대해 알아보세요.
-    // 기존 특성에 대한 설명을 보려면 가리킵니다.
-    // 자세한 내용을 보려면 https://go.microsoft.com/fwlink/?linkid=830387을(를) 방문하세요.
-
-  
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Relay Agent",
+      "name": "Debug Agent",
       "type": "go",
       "request": "launch",
       "mode": "debug",
-      "program": "${workspaceFolder}/agent/cmd/agent",
-      "cwd": "${workspaceFolder}",
-      "env": {
-        "GOTOOLCHAIN": "local",
-        "GOSUMDB": "sum.golang.org",
-        "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}",
-        "AGENT_ADDR": "0x1111111111111111111111111111111111111111",
-        "ETH_RPC_URL": "http://127.0.0.1:8545",
-        "STORE_PATH": "${workspaceFolder}/data/store.json",
-        "LOG_LEVEL": "debug"
-      },
-      "args": [],
-      "showLog": true,
-      "trace": "verbose"
+      "program": "${workspaceFolder}/agent/cmd",
+      "envFile": "${workspaceFolder}/.env"
     },
     {
-      "name": "Debug Store Package",
+      "name": "Debug Current Package Test",
       "type": "go",
       "request": "launch",
       "mode": "test",
-      "program": "${workspaceFolder}/agent/internal/store",
-      "cwd": "${workspaceFolder}",
-      "env": {
-        "GOTOOLCHAIN": "local",
-        "GOSUMDB": "sum.golang.org",
-        "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}"
-      },
-      "showLog": true,
-      "trace": "verbose"
-    },
-    {
-      "name": "Debug Protocol Engine",
-      "type": "go",
-      "request": "launch",
-      "mode": "test",
-      "program": "${workspaceFolder}/agent/internal/protocol",
-      "cwd": "${workspaceFolder}",
-      "env": {
-        "GOTOOLCHAIN": "local",
-        "GOSUMDB": "sum.golang.org",
-        "PATH": "/usr/local/go/bin:/home/seegii/go/bin:${env:PATH}"
-      },
-      "showLog": true,
-      "trace": "verbose"
-    },
-    {
-      "name": "Attach Delve",
-      "type": "go",
-      "request": "attach",
-      "mode": "remote",
-      "host": "127.0.0.1",
-      "port": 2345,
-      "cwd": "${workspaceFolder}"
+      "program": "${fileDirname}"
     }
   ]
 }

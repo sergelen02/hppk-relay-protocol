@@ -1,6 +1,6 @@
 module github.com/sergelen02/hppk-relay-protocol
 
-go 1.24.0
+go 1.25.0
 
 replace github.com/sergelen02/HPPK_2 => /home/seegii/다운로드/HPPK_2
 
@@ -34,5 +34,5 @@ require (
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 )
