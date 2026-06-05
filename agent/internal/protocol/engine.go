@@ -16,11 +16,16 @@ import (
 
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/client"
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/eth"
-	"github.com/sergelen02/hppk-relay-protocol/agent/internal/hppk"
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/logging"
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/metrics"
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/store"
 )
+
+type HPPKSigner interface {
+	Sign(msg []byte) ([]byte, error)
+	Verify(pubKey []byte, msg []byte, sig []byte) (bool, error)
+	PublicKeyBytes() ([]byte, error)
+}
 
 type EngineConfig struct {
 	AgentID              string
@@ -34,7 +39,7 @@ type EngineConfig struct {
 	Metrics     *metrics.Metrics
 	Store       store.Store
 	EthClient   *eth.Client
-	HPPKSigner  *hppk.Signer
+	HPPKSigner  HPPKSigner
 	RelayClient *client.RelayClient
 }
 
@@ -50,7 +55,7 @@ type Engine struct {
 	metrics     *metrics.Metrics
 	store       store.Store
 	ethClient   *eth.Client
-	hppkSigner  *hppk.Signer
+	hppkSigner  HPPKSigner
 	relayClient *client.RelayClient
 }
 
@@ -188,6 +193,10 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 
 	if err := e.verifyPreviousProof(pkt); err != nil {
 		return nil, fmt.Errorf("verify previous proof: %w", err)
+	}
+
+	if err := e.markReplayOnce(pkt); err != nil {
+		return nil, err
 	}
 
 	nextStep := pkt.Step + 1
@@ -383,7 +392,7 @@ func (e *Engine) signPacket(pkt RelayPacket) (chainHashHex string, sig []byte, p
 
 func (e *Engine) submitOnChain(ctx context.Context, pkt RelayPacket) error {
 	if e.ethClient == nil {
-		return errors.New("eth client is nil")
+		return nil
 	}
 
 	req := eth.SubmitHopRequest{
@@ -578,4 +587,18 @@ func (b *bigInt) SetString(s string, base int) {
 		n = big.NewInt(0)
 	}
 	b.Int = n
+}
+
+func (e *Engine) markReplayOnce(pkt RelayPacket) error {
+	key := processedPacketKey(pkt)
+
+	e.replayMu.Lock()
+	defer e.replayMu.Unlock()
+
+	if _, ok := e.replayCache[key]; ok {
+		return fmt.Errorf("replay rejected: %s", key)
+	}
+
+	e.replayCache[key] = struct{}{}
+	return nil
 }

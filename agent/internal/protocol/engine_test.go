@@ -3,7 +3,7 @@ package protocol
 import (
 	"context"
 	"crypto/sha256"
-	"os"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,6 +25,7 @@ func newFakeSigner() *fakeSigner {
 func (f *fakeSigner) Sign(msg []byte) ([]byte, error) {
 	b := append([]byte{}, f.secKey...)
 	b = append(b, msg...)
+
 	h := sha256.Sum256(b)
 	return h[:], nil
 }
@@ -36,6 +37,7 @@ func (f *fakeSigner) Verify(pubKey []byte, msg []byte, sig []byte) (bool, error)
 
 	b := append([]byte{}, f.secKey...)
 	b = append(b, msg...)
+
 	expected := sha256.Sum256(b)
 
 	for i := range expected {
@@ -43,6 +45,7 @@ func (f *fakeSigner) Verify(pubKey []byte, msg []byte, sig []byte) (bool, error)
 			return false, nil
 		}
 	}
+
 	return true, nil
 }
 
@@ -53,8 +56,7 @@ func (f *fakeSigner) PublicKeyBytes() ([]byte, error) {
 func newTestEngine(t *testing.T, expectedStep int) (*Engine, *store.FileStore, *fakeSigner) {
 	t.Helper()
 
-	path := t.TempDir() + "/store.json"
-	fs, err := store.NewFileStore(path)
+	fs, err := store.NewFileStore(t.TempDir() + "/store.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,19 +80,29 @@ func newTestEngine(t *testing.T, expectedStep int) (*Engine, *store.FileStore, *
 
 func makeValidIncomingPacket(t *testing.T, signer *fakeSigner) RelayPacket {
 	t.Helper()
+	return makeValidIncomingPacketWithStep(t, signer, 1, 1)
+}
+
+func makeValidIncomingPacketWithStep(t *testing.T, signer *fakeSigner, step int, nonce uint64) RelayPacket {
+	t.Helper()
 
 	payload := []byte("hello secure relay")
 	payloadHash := hashBytesHex(payload)
 
+	prevChainHash := zeroHashHex()
+	if step > 1 {
+		prevChainHash = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	}
+
 	pkt := RelayPacket{
 		SessionID:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Step:          1,
+		Step:          step,
 		From:          "0x1111111111111111111111111111111111111111",
 		To:            "0x2222222222222222222222222222222222222222",
 		Payload:       payload,
 		PayloadHash:   payloadHash,
-		PrevChainHash: zeroHashHex(),
-		LocalNonce:    1,
+		PrevChainHash: prevChainHash,
+		LocalNonce:    nonce,
 		Meta: map[string]string{
 			"next_address": "0x3333333333333333333333333333333333333333",
 		},
@@ -130,9 +142,14 @@ func makeValidIncomingPacket(t *testing.T, signer *fakeSigner) RelayPacket {
 }
 
 func TestComputeChainHashDeterministic(t *testing.T) {
-	meta := map[string]string{
+	meta1 := map[string]string{
 		"b": "2",
 		"a": "1",
+	}
+
+	meta2 := map[string]string{
+		"a": "1",
+		"b": "2",
 	}
 
 	h1, err := computeChainHash(
@@ -144,7 +161,7 @@ func TestComputeChainHashDeterministic(t *testing.T) {
 		zeroHashHex(),
 		1,
 		100,
-		meta,
+		meta1,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -159,10 +176,7 @@ func TestComputeChainHashDeterministic(t *testing.T) {
 		zeroHashHex(),
 		1,
 		100,
-		map[string]string{
-			"a": "1",
-			"b": "2",
-		},
+		meta2,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -204,6 +218,33 @@ func TestProcessRelayValidPacketSavesRecoveryState(t *testing.T) {
 	}
 }
 
+func TestProcessRelayCheckpointSavedAtStep10(t *testing.T) {
+	e, fs, signer := newTestEngine(t, 10)
+	pkt := makeValidIncomingPacketWithStep(t, signer, 9, 9)
+
+	resp, err := e.ProcessRelay(context.Background(), ProcessRelayRequest{Packet: pkt})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.AcceptedStep != 10 {
+		t.Fatalf("expected accepted step 10, got %d", resp.AcceptedStep)
+	}
+
+	cp, ok := fs.GetCheckpoint(pkt.SessionID)
+	if !ok {
+		t.Fatal("checkpoint was not saved")
+	}
+
+	if cp.Step != 10 {
+		t.Fatalf("expected checkpoint step 10, got %d", cp.Step)
+	}
+
+	if cp.ChainHash != resp.NewChainHash {
+		t.Fatalf("checkpoint hash mismatch: checkpoint=%s response=%s", cp.ChainHash, resp.NewChainHash)
+	}
+}
+
 func TestProcessRelayPayloadTamperReject(t *testing.T) {
 	e, _, signer := newTestEngine(t, 2)
 	pkt := makeValidIncomingPacket(t, signer)
@@ -238,24 +279,6 @@ func TestProcessRelayWrongSequenceReject(t *testing.T) {
 	}
 }
 
-func TestProcessRelayReplayRejectByProcessedPacketKey(t *testing.T) {
-	e, fs, signer := newTestEngine(t, 2)
-	pkt := makeValidIncomingPacket(t, signer)
-
-	packetKey := pkt.SessionID + ":" + string(rune(pkt.Step)) + ":" + string(rune(pkt.LocalNonce))
-	if err := fs.MarkProcessedPacket(packetKey); err != nil {
-		t.Fatal(err)
-	}
-
-	if !fs.HasProcessedPacket(packetKey) {
-		t.Fatal("processed packet should exist")
-	}
-
-	// 현재 engine.go가 processed packet 검사를 직접 하지 않는다면,
-	// 이 테스트는 store replay cache 동작만 확인한다.
-	t.Log("replay cache is available; connect this check inside ProcessRelay for full replay rejection")
-}
-
 func TestProcessRelayTimestampReject(t *testing.T) {
 	e, _, signer := newTestEngine(t, 2)
 	pkt := makeValidIncomingPacket(t, signer)
@@ -268,7 +291,37 @@ func TestProcessRelayTimestampReject(t *testing.T) {
 	}
 }
 
-func TestMain(m *testing.M) {
-	code := m.Run()
-	os.Exit(code)
+func TestProcessRelayReplayReject(t *testing.T) {
+	e, _, signer := newTestEngine(t, 2)
+	pkt := makeValidIncomingPacket(t, signer)
+
+	_, err := e.ProcessRelay(context.Background(), ProcessRelayRequest{Packet: pkt})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = e.ProcessRelay(context.Background(), ProcessRelayRequest{Packet: pkt})
+	if err == nil {
+		t.Fatal("expected replay rejection")
+	}
+
+}
+
+func TestReplayCacheStoreKey(t *testing.T) {
+	_, fs, signer := newTestEngine(t, 2)
+	pkt := makeValidIncomingPacket(t, signer)
+
+	packetKey := fmt.Sprintf("%s:%d:%d", normalizeHex(pkt.SessionID), pkt.Step, pkt.LocalNonce)
+
+	if fs.HasProcessedPacket(packetKey) {
+		t.Fatal("packet should not be processed yet")
+	}
+
+	if err := fs.MarkProcessedPacket(packetKey); err != nil {
+		t.Fatal(err)
+	}
+
+	if !fs.HasProcessedPacket(packetKey) {
+		t.Fatal("replay cache failed")
+	}
 }

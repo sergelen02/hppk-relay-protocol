@@ -40,7 +40,11 @@ type SubmitHopRequest struct {
 	TimestampUnix int64
 	Meta          map[string]string
 }
-
+type CreateSessionRequest struct {
+	SessionID   string
+	Route       []string
+	PayloadHash string
+}
 type Client struct {
 	rpcURL            string
 	configuredChainID int64
@@ -147,7 +151,114 @@ func (c *Client) Close() error {
 	c.ec.Close()
 	return nil
 }
+func (c *Client) CreateSession(ctx context.Context, req CreateSessionRequest) error {
+	if c == nil || c.ec == nil {
+		return errors.New("ethereum client is nil")
+	}
+	if strings.TrimSpace(req.SessionID) == "" {
+		return errors.New("create session: session id is required")
+	}
+	if len(req.Route) == 0 {
+		return errors.New("create session: route is required")
+	}
+	if strings.TrimSpace(req.PayloadHash) == "" {
+		return errors.New("create session: payload hash is required")
+	}
 
+	ok, err := c.HasContractCode(ctx)
+	if err != nil {
+		return fmt.Errorf("create session: contract code check failed: %w", err)
+	}
+	if !ok {
+		return errors.New("create session: contract code not found")
+	}
+
+	privateKey, err := c.loadPrivateKey()
+	if err != nil {
+		return fmt.Errorf("create session: load private key: %w", err)
+	}
+
+	chainID, err := c.ec.ChainID(ctx)
+	if err != nil {
+		return fmt.Errorf("create session: get chain id: %w", err)
+	}
+
+	nonce, err := c.ec.PendingNonceAt(ctx, c.fromAddress)
+	if err != nil {
+		return fmt.Errorf("create session: get nonce: %w", err)
+	}
+
+	gasPrice, err := c.ec.SuggestGasPrice(ctx)
+	if err != nil {
+		return fmt.Errorf("create session: suggest gas price: %w", err)
+	}
+
+	route := make([]common.Address, 0, len(req.Route))
+	for _, a := range req.Route {
+		route = append(route, common.HexToAddress(a))
+	}
+
+	contractABI, err := abi.JSON(strings.NewReader(createSessionABI))
+	if err != nil {
+		return fmt.Errorf("create session: parse abi: %w", err)
+	}
+
+	data, err := contractABI.Pack(
+		"createSession",
+		hexToBytes32(req.SessionID),
+		route,
+		hexToBytes32(req.PayloadHash),
+	)
+	if err != nil {
+		return fmt.Errorf("create session: abi pack: %w", err)
+	}
+
+	msg := ethereum.CallMsg{
+		From:     c.fromAddress,
+		To:       &c.contractAddress,
+		GasPrice: gasPrice,
+		Value:    big.NewInt(0),
+		Data:     data,
+	}
+
+	gasLimit, err := c.ec.EstimateGas(ctx, msg)
+	if err != nil {
+		gasLimit = 1_500_000
+	}
+
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    nonce,
+		To:       &c.contractAddress,
+		Value:    big.NewInt(0),
+		Gas:      gasLimit,
+		GasPrice: gasPrice,
+		Data:     data,
+	})
+
+	signer := types.LatestSignerForChainID(chainID)
+	signedTx, err := types.SignTx(tx, signer, privateKey)
+	if err != nil {
+		return fmt.Errorf("create session: sign tx: %w", err)
+	}
+
+	if err := c.ec.SendTransaction(ctx, signedTx); err != nil {
+		return fmt.Errorf("create session: send tx: %w", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, c.confirmTimeout)
+	defer cancel()
+
+	receipt, err := waitReceipt(waitCtx, c.ec, signedTx.Hash())
+	if err != nil {
+		return fmt.Errorf("create session: wait receipt: %w", err)
+	}
+
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("create session: tx reverted tx_hash=%s", signedTx.Hash().Hex())
+	}
+
+	return nil
+}
 func (c *Client) SubmitHop(ctx context.Context, req SubmitHopRequest) error {
 	if c == nil || c.ec == nil {
 		return errors.New("ethereum client is nil")
@@ -364,6 +475,19 @@ func sortStrings(a []string) {
 	}
 }
 
+const createSessionABI = `[
+  {
+    "inputs": [
+      { "internalType": "bytes32", "name": "sessionId", "type": "bytes32" },
+      { "internalType": "address[]", "name": "route", "type": "address[]" },
+      { "internalType": "bytes32", "name": "payloadHash", "type": "bytes32" }
+    ],
+    "name": "createSession",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]`
 const submitHopABI = `[
   {
     "inputs": [
