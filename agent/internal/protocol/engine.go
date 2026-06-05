@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -57,6 +58,9 @@ type Engine struct {
 	ethClient   *eth.Client
 	hppkSigner  HPPKSigner
 	relayClient *client.RelayClient
+
+	replayMu    sync.Mutex
+	replayCache map[string]struct{}
 }
 
 type RelayPacket struct {
@@ -110,6 +114,8 @@ func NewEngine(cfg EngineConfig) *Engine {
 		ethClient:   cfg.EthClient,
 		hppkSigner:  cfg.HPPKSigner,
 		relayClient: cfg.RelayClient,
+
+		replayCache: make(map[string]struct{}),
 	}
 }
 
@@ -411,6 +417,10 @@ func (e *Engine) submitOnChain(ctx context.Context, pkt RelayPacket) error {
 	}
 
 	return e.ethClient.SubmitHop(ctx, req)
+}
+
+func processedPacketKey(pkt RelayPacket) string {
+	return fmt.Sprintf("%s:%d:%d", normalizeHex(pkt.SessionID), pkt.Step, pkt.LocalNonce)
 }
 
 func nextHop(route []string, idx int) string {
