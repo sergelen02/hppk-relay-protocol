@@ -206,8 +206,8 @@ func (c *Client) CreateSession(ctx context.Context, req CreateSessionRequest) er
 	data, err := contractABI.Pack(
 		"createSession",
 		hexToBytes32(req.SessionID),
-		route,
 		hexToBytes32(req.PayloadHash),
+		route,
 	)
 	if err != nil {
 		return fmt.Errorf("create session: abi pack: %w", err)
@@ -479,8 +479,8 @@ const createSessionABI = `[
   {
     "inputs": [
       { "internalType": "bytes32", "name": "sessionId", "type": "bytes32" },
-      { "internalType": "address[]", "name": "route", "type": "address[]" },
-      { "internalType": "bytes32", "name": "payloadHash", "type": "bytes32" }
+      { "internalType": "bytes32", "name": "originPayloadHash", "type": "bytes32" },
+      { "internalType": "address[]", "name": "route", "type": "address[]" }
     ],
     "name": "createSession",
     "outputs": [],
@@ -488,6 +488,7 @@ const createSessionABI = `[
     "type": "function"
   }
 ]`
+
 const submitHopABI = `[
   {
     "inputs": [
