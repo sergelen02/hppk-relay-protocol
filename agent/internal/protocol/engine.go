@@ -143,7 +143,7 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 	initialPrev := zeroHashHex()
 
 	packet := RelayPacket{
-		SessionID:     normalizeHex(req.SessionID),
+		SessionID:     sessionIDBytes32Hex(req.SessionID),
 		Step:          1,
 		From:          e.myAddress,
 		To:            nextHop(req.RouteAddresses, 0),
@@ -162,6 +162,16 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 	packet.ChainHash = newChainHash
 	packet.Signature = sig
 	packet.PubKey = pubKey
+
+	if e.ethClient != nil {
+		if err := e.ethClient.CreateSession(ctx, eth.CreateSessionRequest{
+			SessionID:   packet.SessionID,
+			Route:       normalizeRoute(req.RouteAddresses),
+			PayloadHash: packet.PayloadHash,
+		}); err != nil {
+			return fmt.Errorf("create session on chain: %w", err)
+		}
+	}
 
 	if err := e.submitOnChain(ctx, packet); err != nil {
 		return fmt.Errorf("submit initial packet on chain: %w", err)
@@ -290,7 +300,7 @@ func (e *Engine) validateIncomingPacket(pkt RelayPacket) error {
 	if normalizeHex(pkt.To) != e.myAddress {
 		return fmt.Errorf("wrong recipient: packet.to=%s my=%s", pkt.To, e.myAddress)
 	}
-	if pkt.Step != e.expectedStep-1 {
+	if e.expectedStep > 0 && pkt.Step != e.expectedStep-1 {
 		return fmt.Errorf("unexpected incoming step: got=%d expected_previous=%d", pkt.Step, e.expectedStep-1)
 	}
 	if pkt.TimestampUnix == 0 {
@@ -605,10 +615,42 @@ func (e *Engine) markReplayOnce(pkt RelayPacket) error {
 	e.replayMu.Lock()
 	defer e.replayMu.Unlock()
 
+	if e.replayCache == nil {
+		e.replayCache = make(map[string]struct{})
+	}
+
 	if _, ok := e.replayCache[key]; ok {
 		return fmt.Errorf("replay rejected: %s", key)
 	}
 
 	e.replayCache[key] = struct{}{}
 	return nil
+}
+
+func sessionIDBytes32Hex(sessionID string) string {
+	s := strings.TrimSpace(sessionID)
+	if s == "" {
+		return zeroHashHex()
+	}
+
+	n := normalizeHex(s)
+	hexPart := strings.TrimPrefix(n, "0x")
+	if len(hexPart) == 64 {
+		if _, err := hex.DecodeString(hexPart); err == nil {
+			return n
+		}
+	}
+
+	return ethcrypto.Keccak256Hash([]byte(s)).Hex()
+}
+
+func normalizeRoute(route []string) []string {
+	out := make([]string, 0, len(route))
+	for _, addr := range route {
+		addr = normalizeHex(addr)
+		if addr != "" {
+			out = append(out, addr)
+		}
+	}
+	return out
 }
