@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,24 +14,50 @@ import (
 func loadRealHPPKSigner(t *testing.T) *realhppk.Signer {
 	t.Helper()
 
-	publicKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_pub.key")
-	secretKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_sec.key")
+	publicKeyPath := strings.TrimSpace(
+		os.Getenv(hppkPublicKeyPathEnv),
+	)
+	secretKeyPath := strings.TrimSpace(
+		os.Getenv(hppkSecretKeyPathEnv),
+	)
 
 	if publicKeyPath == "" {
-		t.Fatal("HPPK_PUBLIC_KEY_PATH is required")
+		t.Fatalf(
+			"%s environment variable is required",
+			hppkPublicKeyPathEnv,
+		)
 	}
+
 	if secretKeyPath == "" {
-		t.Fatal("HPPK_SECRET_KEY_PATH is required")
+		t.Fatalf(
+			"%s environment variable is required",
+			hppkSecretKeyPathEnv,
+		)
+	}
+
+	if _, err := os.Stat(publicKeyPath); err != nil {
+		t.Fatalf(
+			"HPPK public key file is not accessible: path=%s err=%v",
+			publicKeyPath,
+			err,
+		)
+	}
+
+	if _, err := os.Stat(secretKeyPath); err != nil {
+		t.Fatalf(
+			"HPPK secret key file is not accessible: path=%s err=%v",
+			secretKeyPath,
+			err,
+		)
 	}
 
 	signer, err := realhppk.NewSigner(realhppk.SignerConfig{
-		PublicKeyPath: publicKeyPath,
-		SecretKeyPath: secretKeyPath,
+		PublicKeyPath:  publicKeyPath,
+		SecretKeyPath:  secretKeyPath,
 		AlgorithmName:  "HPPK",
 		EnableVerify:   true,
 		StrictKeyCheck: true,
 	})
-
 	if err != nil {
 		t.Fatalf("create real HPPK signer: %v", err)
 	}
@@ -51,21 +78,31 @@ func newRealHPPKTestEngine(
 		t.Fatalf("create store: %v", err)
 	}
 
+	t.Cleanup(func() {
+		if err := fs.Close(); err != nil {
+			t.Errorf("close test store: %v", err)
+		}
+	})
+
 	signer := loadRealHPPKSigner(t)
 
 	engine := NewEngine(EngineConfig{
 		AgentID:              "real-hppk-agent",
-		MyAddress:            "0x2222222222222222222222222222222222222222",
+		MyAddress:            realHPPKAgentAddress,
 		ExpectedStep:         expectedStep,
 		EnablePayloadCompare: true,
 		MaxClockSkew:         5 * time.Minute,
 		Store:                fs,
 		HPPKSigner:           signer,
 
-		// 오프체인 실험이므로 비활성화
+		// 1단계 오프체인 실험이므로 비활성화합니다.
 		EthClient:   nil,
 		RelayClient: nil,
 	})
+
+	if engine == nil {
+		t.Fatal("NewEngine returned nil")
+	}
 
 	return engine, fs, signer
 }
@@ -78,6 +115,18 @@ func makeRealHPPKPacket(
 ) RelayPacket {
 	t.Helper()
 
+	if signer == nil {
+		t.Fatal("real HPPK signer is nil")
+	}
+
+	if step < 1 {
+		t.Fatalf("step must be at least 1: got=%d", step)
+	}
+
+	if nonce == 0 {
+		t.Fatal("nonce must be greater than zero")
+	}
+
 	payload := []byte("real HPPK secure relay message")
 
 	prevChainHash := zeroHashHex()
@@ -87,20 +136,16 @@ func makeRealHPPKPacket(
 	}
 
 	packet := RelayPacket{
-		SessionID:
-			"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Step: step,
-		From:
-			"0x1111111111111111111111111111111111111111",
-		To:
-			"0x2222222222222222222222222222222222222222",
+		SessionID:     realHPPKSessionID,
+		Step:          step,
+		From:          realHPPKFromAddress,
+		To:            realHPPKAgentAddress,
 		Payload:       payload,
 		PayloadHash:   hashBytesHex(payload),
 		PrevChainHash: prevChainHash,
 		LocalNonce:    nonce,
 		Meta: map[string]string{
-			"next_address":
-				"0x3333333333333333333333333333333333333333",
+			"next_address": realHPPKNextAddress,
 		},
 		TimestampUnix: time.Now().UTC().Unix(),
 	}
@@ -127,9 +172,17 @@ func makeRealHPPKPacket(
 		t.Fatalf("real HPPK sign: %v", err)
 	}
 
+	if len(signature) == 0 {
+		t.Fatal("real HPPK Sign returned empty signature")
+	}
+
 	publicKey, err := signer.PublicKeyBytes()
 	if err != nil {
 		t.Fatalf("load HPPK public key: %v", err)
+	}
+
+	if len(publicKey) == 0 {
+		t.Fatal("real HPPK public key is empty")
 	}
 
 	packet.ChainHash = chainHash
@@ -137,6 +190,29 @@ func makeRealHPPKPacket(
 	packet.PubKey = publicKey
 
 	return packet
+}
+
+func requireErrorContains(
+	t *testing.T,
+	err error,
+	expectedText string,
+) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf(
+			"expected error containing %q, got nil",
+			expectedText,
+		)
+	}
+
+	if !strings.Contains(err.Error(), expectedText) {
+		t.Fatalf(
+			"expected error containing %q, got: %v",
+			expectedText,
+			err,
+		)
+	}
 }
 
 func TestRealHPPKSignVerifyDirect(t *testing.T) {
@@ -173,6 +249,35 @@ func TestRealHPPKSignVerifyDirect(t *testing.T) {
 	)
 }
 
+func TestRealHPPKTamperedMessageDirectReject(t *testing.T) {
+	signer := loadRealHPPKSigner(t)
+
+	originalMessage := []byte("original real HPPK message")
+
+	signature, err := signer.Sign(originalMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	publicKey, err := signer.PublicKeyBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err := signer.Verify(
+		publicKey,
+		[]byte("tampered real HPPK message"),
+		signature,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ok {
+		t.Fatal("real HPPK accepted signature for tampered message")
+	}
+}
+
 func TestProcessRelayRealHPPKValidPacket(t *testing.T) {
 	engine, fs, signer := newRealHPPKTestEngine(t, 2)
 	packet := makeRealHPPKPacket(t, signer, 1, 1)
@@ -185,8 +290,19 @@ func TestProcessRelayRealHPPKValidPacket(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if response == nil {
+		t.Fatal("ProcessRelay returned nil response")
+	}
+
 	if !response.OK {
 		t.Fatal("real HPPK packet was rejected")
+	}
+
+	if response.AcceptedStep != 2 {
+		t.Fatalf(
+			"expected accepted step 2, got %d",
+			response.AcceptedStep,
+		)
 	}
 
 	state, ok := fs.GetSessionState(packet.SessionID)
@@ -202,7 +318,11 @@ func TestProcessRelayRealHPPKValidPacket(t *testing.T) {
 	}
 
 	if state.LastChainHash != response.NewChainHash {
-		t.Fatal("saved chainHash does not match response chainHash")
+		t.Fatalf(
+			"saved chainHash mismatch: state=%s response=%s",
+			state.LastChainHash,
+			response.NewChainHash,
+		)
 	}
 }
 
@@ -216,9 +336,12 @@ func TestProcessRelayRealHPPKPayloadTamperReject(t *testing.T) {
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("tampered payload was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"payload hash mismatch",
+	)
 }
 
 func TestProcessRelayRealHPPKChainHashTamperReject(t *testing.T) {
@@ -232,9 +355,12 @@ func TestProcessRelayRealHPPKChainHashTamperReject(t *testing.T) {
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("tampered chainHash was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"chain hash mismatch",
+	)
 }
 
 func TestProcessRelayRealHPPKPrevChainHashTamperReject(t *testing.T) {
@@ -248,9 +374,12 @@ func TestProcessRelayRealHPPKPrevChainHashTamperReject(t *testing.T) {
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("tampered prevChainHash was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"chain hash mismatch",
+	)
 }
 
 func TestProcessRelayRealHPPKReplayReject(t *testing.T) {
@@ -262,16 +391,19 @@ func TestProcessRelayRealHPPKReplayReject(t *testing.T) {
 		ProcessRelayRequest{Packet: packet},
 	)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("initial packet processing failed: %v", err)
 	}
 
 	_, err = engine.ProcessRelay(
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("replayed real HPPK packet was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"replay detected",
+	)
 }
 
 func TestProcessRelayRealHPPKWrongSequenceReject(t *testing.T) {
@@ -282,9 +414,12 @@ func TestProcessRelayRealHPPKWrongSequenceReject(t *testing.T) {
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("wrong sequence packet was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"unexpected incoming step",
+	)
 }
 
 func TestProcessRelayRealHPPKExpiredTimestampReject(t *testing.T) {
@@ -298,9 +433,31 @@ func TestProcessRelayRealHPPKExpiredTimestampReject(t *testing.T) {
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("expired timestamp packet was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"timestamp outside allowed skew",
+	)
+}
+
+func TestProcessRelayRealHPPKFutureTimestampReject(t *testing.T) {
+	engine, _, signer := newRealHPPKTestEngine(t, 2)
+	packet := makeRealHPPKPacket(t, signer, 1, 1)
+
+	packet.TimestampUnix =
+		time.Now().UTC().Add(1 * time.Hour).Unix()
+
+	_, err := engine.ProcessRelay(
+		context.Background(),
+		ProcessRelayRequest{Packet: packet},
+	)
+
+	requireErrorContains(
+		t,
+		err,
+		"timestamp outside allowed skew",
+	)
 }
 
 func TestProcessRelayRealHPPKWrongReceiverReject(t *testing.T) {
@@ -314,29 +471,89 @@ func TestProcessRelayRealHPPKWrongReceiverReject(t *testing.T) {
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
-	if err == nil {
-		t.Fatal("wrong receiver packet was accepted")
-	}
+
+	requireErrorContains(
+		t,
+		err,
+		"wrong recipient",
+	)
 }
 
 func TestProcessRelayRealHPPKForgedSignatureReject(t *testing.T) {
 	engine, _, signer := newRealHPPKTestEngine(t, 2)
 	packet := makeRealHPPKPacket(t, signer, 1, 1)
 
-	if len(packet.Signature) == 0 {
-		t.Fatal("real HPPK signature is empty")
+	// JSON 바이트를 깨뜨리는 대신 다른 메시지에 대해 생성한
+	// 정상 형식의 HPPK 서명을 사용합니다.
+	forgedSignature, err := signer.Sign(
+		[]byte("signature generated for a different message"),
+	)
+	if err != nil {
+		t.Fatalf("create forged signature: %v", err)
 	}
 
-	packet.Signature =
-		append([]byte(nil), packet.Signature...)
+	packet.Signature = forgedSignature
 
-	packet.Signature[len(packet.Signature)/2] ^= 0xff
+	_, err = engine.ProcessRelay(
+		context.Background(),
+		ProcessRelayRequest{Packet: packet},
+	)
+
+	requireErrorContains(
+		t,
+		err,
+		"hppk verification returned false",
+	)
+}
+
+func TestProcessRelayRealHPPKWrongPublicKeyReject(t *testing.T) {
+	engine, _, signer := newRealHPPKTestEngine(t, 2)
+	packet := makeRealHPPKPacket(t, signer, 1, 1)
+
+	packet.PubKey = []byte(`{"invalid":"public-key"}`)
 
 	_, err := engine.ProcessRelay(
 		context.Background(),
 		ProcessRelayRequest{Packet: packet},
 	)
+
 	if err == nil {
-		t.Fatal("forged real HPPK signature was accepted")
+		t.Fatal("invalid public key was accepted")
 	}
+}
+
+func TestProcessRelayRealHPPKEmptySignatureReject(t *testing.T) {
+	engine, _, signer := newRealHPPKTestEngine(t, 2)
+	packet := makeRealHPPKPacket(t, signer, 1, 1)
+
+	packet.Signature = nil
+
+	_, err := engine.ProcessRelay(
+		context.Background(),
+		ProcessRelayRequest{Packet: packet},
+	)
+
+	requireErrorContains(
+		t,
+		err,
+		"signature is required",
+	)
+}
+
+func TestProcessRelayRealHPPKEmptyPublicKeyReject(t *testing.T) {
+	engine, _, signer := newRealHPPKTestEngine(t, 2)
+	packet := makeRealHPPKPacket(t, signer, 1, 1)
+
+	packet.PubKey = nil
+
+	_, err := engine.ProcessRelay(
+		context.Background(),
+		ProcessRelayRequest{Packet: packet},
+	)
+
+	requireErrorContains(
+		t,
+		err,
+		"pub_key is required",
+	)
 }

@@ -2,14 +2,21 @@ package protocol
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	realhppk "github.com/sergelen02/hppk-relay-protocol/agent/internal/hppk"
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/store"
+)
+
+const (
+	benchmarkAgentAddress = "0x2222222222222222222222222222222222222222"
+	benchmarkFromAddress  = "0x1111111111111111111111111111111111111111"
 )
 
 type realBenchmarkMemoryStore struct {
@@ -30,9 +37,7 @@ func newRealBenchmarkMemoryStore() *realBenchmarkMemoryStore {
 	}
 }
 
-func (s *realBenchmarkMemoryStore) Ping(
-	_ context.Context,
-) error {
+func (s *realBenchmarkMemoryStore) Ping(_ context.Context) error {
 	return nil
 }
 
@@ -61,18 +66,14 @@ func (s *realBenchmarkMemoryStore) SetLastNonce(
 	return nil
 }
 
-func (s *realBenchmarkMemoryStore) HasProcessedPacket(
-	key string,
-) bool {
+func (s *realBenchmarkMemoryStore) HasProcessedPacket(key string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.processedPacket[key]
 }
 
-func (s *realBenchmarkMemoryStore) MarkProcessedPacket(
-	key string,
-) error {
+func (s *realBenchmarkMemoryStore) MarkProcessedPacket(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -96,6 +97,7 @@ func (s *realBenchmarkMemoryStore) SetSessionState(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	state.UpdatedAt = time.Now().UTC()
 	s.sessionStates[state.SessionID] = state
 	return nil
 }
@@ -116,23 +118,54 @@ func (s *realBenchmarkMemoryStore) SetCheckpoint(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	checkpoint.CreatedAt = time.Now().UTC()
 	s.checkpoints[checkpoint.SessionID] = checkpoint
 	return nil
 }
 
-func loadRealBenchmarkSigner(
-	b *testing.B,
-) *realhppk.Signer {
+// loadRealBenchmarkSigner는 환경변수에 지정된 실제 HPPK 키를 읽습니다.
+//
+// 잘못된 형태:
+//
+//	os.Getenv("/home/.../hppk_pub.key")
+//
+// 올바른 형태:
+//
+//	os.Getenv("HPPK_PUBLIC_KEY_PATH")
+func loadRealBenchmarkSigner(b *testing.B) *realhppk.Signer {
 	b.Helper()
 
-	publicKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_pub.key")
-	secretKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_sec.key")
+	publicKeyPath := os.Getenv(hppkPublicKeyPathEnv)
+	secretKeyPath := os.Getenv(hppkSecretKeyPathEnv)
 
 	if publicKeyPath == "" {
-		b.Fatal("HPPK_PUBLIC_KEY_PATH is required")
+		b.Fatalf(
+			"%s environment variable is required",
+			hppkPublicKeyPathEnv,
+		)
 	}
+
 	if secretKeyPath == "" {
-		b.Fatal("HPPK_SECRET_KEY_PATH is required")
+		b.Fatalf(
+			"%s environment variable is required",
+			hppkSecretKeyPathEnv,
+		)
+	}
+
+	if _, err := os.Stat(publicKeyPath); err != nil {
+		b.Fatalf(
+			"public key file is not accessible: path=%s err=%v",
+			publicKeyPath,
+			err,
+		)
+	}
+
+	if _, err := os.Stat(secretKeyPath); err != nil {
+		b.Fatalf(
+			"secret key file is not accessible: path=%s err=%v",
+			secretKeyPath,
+			err,
+		)
 	}
 
 	signer, err := realhppk.NewSigner(realhppk.SignerConfig{
@@ -149,51 +182,48 @@ func loadRealBenchmarkSigner(
 	return signer
 }
 
-func newRealBenchmarkEngine(
-	b *testing.B,
-) (*Engine, *realhppk.Signer) {
-	b.Helper()
-
-	signer := loadRealBenchmarkSigner(b)
-
-	engine := NewEngine(EngineConfig{
+func newRealBenchmarkEngineWithSigner(
+	signer *realhppk.Signer,
+) *Engine {
+	return NewEngine(EngineConfig{
 		AgentID:              "real-hppk-benchmark-agent",
-		MyAddress:            "0x2222222222222222222222222222222222222222",
+		MyAddress:            benchmarkAgentAddress,
 		ExpectedStep:         2,
 		EnablePayloadCompare: true,
 		MaxClockSkew:         5 * time.Minute,
 		Store:                newRealBenchmarkMemoryStore(),
 		HPPKSigner:           signer,
-		EthClient:            nil,
-		RelayClient:          nil,
-	})
 
-	return engine, signer
+		// 순수 오프체인 프로토콜 성능만 측정합니다.
+		EthClient:   nil,
+		RelayClient: nil,
+	})
 }
 
 func makeRealBenchmarkPacket(
-	b *testing.B,
+	tb testing.TB,
 	signer *realhppk.Signer,
 	index int,
 	payloadSize int,
 ) RelayPacket {
-	b.Helper()
+	tb.Helper()
+
+	if payloadSize <= 0 {
+		tb.Fatalf("payload size must be positive: %d", payloadSize)
+	}
 
 	payload := make([]byte, payloadSize)
 	for i := range payload {
 		payload[i] = byte(i % 251)
 	}
 
-	sessionID := fmt.Sprintf(
-		"0x%064x",
-		index+1,
-	)
+	sessionID := fmt.Sprintf("0x%064x", index+1)
 
 	packet := RelayPacket{
 		SessionID:     sessionID,
 		Step:          1,
-		From:          "0x1111111111111111111111111111111111111111",
-		To:            "0x2222222222222222222222222222222222222222",
+		From:          benchmarkFromAddress,
+		To:            benchmarkAgentAddress,
 		Payload:       payload,
 		PayloadHash:   hashBytesHex(payload),
 		PrevChainHash: zeroHashHex(),
@@ -216,19 +246,17 @@ func makeRealBenchmarkPacket(
 		packet.Meta,
 	)
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatalf("compute chain hash: %v", err)
 	}
 
-	signature, err := signer.Sign(
-		mustDecodeHex(chainHash),
-	)
+	signature, err := signer.Sign(mustDecodeHex(chainHash))
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatalf("sign packet chain hash: %v", err)
 	}
 
 	publicKey, err := signer.PublicKeyBytes()
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatalf("load public key bytes: %v", err)
 	}
 
 	packet.ChainHash = chainHash
@@ -242,15 +270,17 @@ func BenchmarkRealHPPKSign32Bytes(b *testing.B) {
 	signer := loadRealBenchmarkSigner(b)
 	message := make([]byte, 32)
 
-	b.ReportAllocs()
 	b.SetBytes(int64(len(message)))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err := signer.Sign(message)
+		signature, err := signer.Sign(message)
 		if err != nil {
 			b.Fatal(err)
 		}
+
+		runtime.KeepAlive(signature)
 	}
 }
 
@@ -268,25 +298,27 @@ func BenchmarkRealHPPKVerify32Bytes(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.ReportAllocs()
 	b.SetBytes(int64(len(message)))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		ok, err := signer.Verify(
+		ok, verifyErr := signer.Verify(
 			publicKey,
 			message,
 			signature,
 		)
-		if err != nil {
-			b.Fatal(err)
+		if verifyErr != nil {
+			b.Fatal(verifyErr)
 		}
 		if !ok {
-			b.Fatal("real HPPK verification failed")
+			b.Fatal("real HPPK verification returned false")
 		}
 	}
 }
 
+// 이 benchmark의 ns/op는 의미가 없습니다.
+// 논문에는 public_key_bytes 값만 사용하세요.
 func BenchmarkRealHPPKPublicKeySize(b *testing.B) {
 	signer := loadRealBenchmarkSigner(b)
 
@@ -300,11 +332,15 @@ func BenchmarkRealHPPKPublicKeySize(b *testing.B) {
 		"public_key_bytes",
 	)
 
+	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
-		_ = len(publicKey)
+		runtime.KeepAlive(publicKey)
 	}
 }
 
+// 이 benchmark의 ns/op는 의미가 없습니다.
+// 논문에는 signature_bytes 값만 사용하세요.
 func BenchmarkRealHPPKSignatureSize(b *testing.B) {
 	signer := loadRealBenchmarkSigner(b)
 	message := make([]byte, 32)
@@ -319,8 +355,10 @@ func BenchmarkRealHPPKSignatureSize(b *testing.B) {
 		"signature_bytes",
 	)
 
+	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
-		_ = len(signature)
+		runtime.KeepAlive(signature)
 	}
 }
 
@@ -340,50 +378,68 @@ func BenchmarkProcessRelayRealHPPK1024Bytes(b *testing.B) {
 	benchmarkProcessRelayRealHPPK(b, 1024)
 }
 
+// 이 벤치마크는 패킷 생성과 송신자 서명 비용을 제외하고,
+// 수신 측 Engine.ProcessRelay() 처리 비용만 측정합니다.
+//
+// 포함:
+//   - 기본 필드 검증
+//   - replay 검사
+//   - payloadHash 검사
+//   - chainHash 재계산
+//   - 실제 HPPK Verify
+//   - 다음 chainHash 생성
+//   - 실제 HPPK Sign
+//   - session state 저장
+//
+// 제외:
+//   - 입력 패킷 생성
+//   - 입력 패킷 최초 서명
+//   - Ethereum 제출
+//   - HTTP 전송
 func benchmarkProcessRelayRealHPPK(
 	b *testing.B,
 	payloadSize int,
 ) {
-	engine, signer := newRealBenchmarkEngine(b)
+	signer := loadRealBenchmarkSigner(b)
+	engine := newRealBenchmarkEngineWithSigner(signer)
+	ctx := context.Background()
 
-	firstPacket :=
-		makeRealBenchmarkPacket(
-			b,
-			signer,
-			1,
-			payloadSize,
-		)
+	firstPacket := makeRealBenchmarkPacket(
+		b,
+		signer,
+		1,
+		payloadSize,
+	)
+
+	packetJSON, err := json.Marshal(firstPacket)
+	if err != nil {
+		b.Fatalf("marshal benchmark packet: %v", err)
+	}
 
 	b.ReportMetric(
 		float64(len(firstPacket.Signature)),
 		"signature_bytes",
 	)
+
 	b.ReportMetric(
 		float64(len(firstPacket.PubKey)),
 		"public_key_bytes",
 	)
 
-	packetBytes :=
-		len(firstPacket.Payload) +
-			len(firstPacket.Signature) +
-			len(firstPacket.PubKey) +
-			len(firstPacket.SessionID) +
-			len(firstPacket.From) +
-			len(firstPacket.To) +
-			len(firstPacket.PayloadHash) +
-			len(firstPacket.PrevChainHash) +
-			len(firstPacket.ChainHash)
-
 	b.ReportMetric(
-		float64(packetBytes),
-		"estimated_packet_bytes",
+		float64(len(packetJSON)),
+		"packet_json_bytes",
 	)
 
-	b.ReportAllocs()
 	b.SetBytes(int64(payloadSize))
+	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
+		// 패킷 생성과 최초 송신자 서명은 ProcessRelay 성능이 아니므로
+		// 측정 시간에서 제외합니다.
+		b.StopTimer()
+
 		packet := makeRealBenchmarkPacket(
 			b,
 			signer,
@@ -391,26 +447,34 @@ func benchmarkProcessRelayRealHPPK(
 			payloadSize,
 		)
 
-		response, err := engine.ProcessRelay(
-			context.Background(),
+		b.StartTimer()
+
+		response, processErr := engine.ProcessRelay(
+			ctx,
 			ProcessRelayRequest{Packet: packet},
 		)
-		if err != nil {
-			b.Fatal(err)
+		if processErr != nil {
+			b.Fatal(processErr)
 		}
 		if !response.OK {
-			b.Fatal("real HPPK relay failed")
+			b.Fatal("real HPPK relay returned non-OK response")
 		}
 	}
 }
 
+// 위조된 서명이 수신된 이후의 거부 비용만 측정합니다.
+// 정상 서명 생성과 패킷 생성 시간은 제외합니다.
 func BenchmarkRejectRealHPPKForgedSignature(b *testing.B) {
-	engine, signer := newRealBenchmarkEngine(b)
+	signer := loadRealBenchmarkSigner(b)
+	engine := newRealBenchmarkEngineWithSigner(signer)
+	ctx := context.Background()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+
 		packet := makeRealBenchmarkPacket(
 			b,
 			signer,
@@ -418,13 +482,17 @@ func BenchmarkRejectRealHPPKForgedSignature(b *testing.B) {
 			32,
 		)
 
-		packet.Signature =
-			append([]byte(nil), packet.Signature...)
+		packet.Signature = append(
+			[]byte(nil),
+			packet.Signature...,
+		)
 
 		packet.Signature[len(packet.Signature)/2] ^= 0xff
 
+		b.StartTimer()
+
 		_, err := engine.ProcessRelay(
-			context.Background(),
+			ctx,
 			ProcessRelayRequest{Packet: packet},
 		)
 		if err == nil {
@@ -433,9 +501,20 @@ func BenchmarkRejectRealHPPKForgedSignature(b *testing.B) {
 	}
 }
 
+// 첫 번째 정상 처리는 측정에서 제외하고,
+// 동일 패킷의 두 번째 replay 거부 경로만 측정합니다.
 func BenchmarkRejectRealHPPKReplay(b *testing.B) {
+	signer := loadRealBenchmarkSigner(b)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
-		engine, signer := newRealBenchmarkEngine(b)
+		b.StopTimer()
+
+		// 각 반복은 독립된 store를 사용해야 합니다.
+		engine := newRealBenchmarkEngineWithSigner(signer)
 
 		packet := makeRealBenchmarkPacket(
 			b,
@@ -445,17 +524,20 @@ func BenchmarkRejectRealHPPKReplay(b *testing.B) {
 		)
 
 		_, err := engine.ProcessRelay(
-			context.Background(),
+			ctx,
 			ProcessRelayRequest{Packet: packet},
 		)
 		if err != nil {
-			b.Fatal(err)
+			b.Fatalf(
+				"initial valid packet failed before replay test: %v",
+				err,
+			)
 		}
 
 		b.StartTimer()
 
 		_, err = engine.ProcessRelay(
-			context.Background(),
+			ctx,
 			ProcessRelayRequest{Packet: packet},
 		)
 
