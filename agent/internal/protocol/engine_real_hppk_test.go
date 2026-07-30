@@ -11,7 +11,6 @@ import (
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/store"
 )
 
-
 func loadRealHPPKSigner(t *testing.T) *realhppk.Signer {
 	t.Helper()
 
