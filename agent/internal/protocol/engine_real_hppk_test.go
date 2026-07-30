@@ -11,16 +11,6 @@ import (
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/store"
 )
 
-const (
-	hppkPublicKeyPathEnv = "HPPK_PUBLIC_KEY_PATH"
-	hppkSecretKeyPathEnv = "HPPK_SECRET_KEY_PATH"
-
-	realHPPKAgentAddress = "0x2222222222222222222222222222222222222222"
-	realHPPKFromAddress  = "0x1111111111111111111111111111111111111111"
-	realHPPKNextAddress  = "0x3333333333333333333333333333333333333333"
-
-	realHPPKSessionID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-)
 
 func loadRealHPPKSigner(t *testing.T) *realhppk.Signer {
 	t.Helper()
