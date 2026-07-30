@@ -22,10 +22,23 @@ import (
 	"github.com/sergelen02/hppk-relay-protocol/agent/internal/store"
 )
 
+const checkpointInterval = 10
+
 type HPPKSigner interface {
 	Sign(msg []byte) ([]byte, error)
 	Verify(pubKey []byte, msg []byte, sig []byte) (bool, error)
 	PublicKeyBytes() ([]byte, error)
+}
+
+type OnChainSubmitter interface {
+	SubmitHop(ctx context.Context, req eth.SubmitHopRequest) error
+}
+
+type OnChainSessionCreator interface {
+	CreateSession(ctx context.Context, req eth.CreateSessionRequest) error
+}
+type PublicKeyRegistry interface {
+	IsPublicKeyAllowed(address string, pubKey []byte) bool
 }
 
 type EngineConfig struct {
@@ -39,8 +52,9 @@ type EngineConfig struct {
 	Logger      logging.Logger
 	Metrics     *metrics.Metrics
 	Store       store.Store
-	EthClient   *eth.Client
+	EthClient   OnChainSubmitter
 	HPPKSigner  HPPKSigner
+	KeyRegistry PublicKeyRegistry
 	RelayClient *client.RelayClient
 }
 
@@ -55,8 +69,9 @@ type Engine struct {
 	logger      logging.Logger
 	metrics     *metrics.Metrics
 	store       store.Store
-	ethClient   *eth.Client
+	ethClient   OnChainSubmitter
 	hppkSigner  HPPKSigner
+	keyRegistry PublicKeyRegistry
 	relayClient *client.RelayClient
 
 	replayMu    sync.Mutex
@@ -100,19 +115,25 @@ type InitSessionRequest struct {
 }
 
 func NewEngine(cfg EngineConfig) *Engine {
+	maxClockSkew := cfg.MaxClockSkew
+	if maxClockSkew == 0 {
+		maxClockSkew = 5 * time.Minute
+	}
+
 	return &Engine{
 		agentID:              cfg.AgentID,
 		myAddress:            normalizeHex(cfg.MyAddress),
 		expectedStep:         cfg.ExpectedStep,
 		nextAgentURL:         strings.TrimSpace(cfg.NextAgentURL),
 		enablePayloadCompare: cfg.EnablePayloadCompare,
-		maxClockSkew:         cfg.MaxClockSkew,
+		maxClockSkew:         maxClockSkew,
 
 		logger:      cfg.Logger,
 		metrics:     cfg.Metrics,
 		store:       cfg.Store,
 		ethClient:   cfg.EthClient,
 		hppkSigner:  cfg.HPPKSigner,
+		keyRegistry: cfg.KeyRegistry,
 		relayClient: cfg.RelayClient,
 
 		replayCache: make(map[string]struct{}),
@@ -138,33 +159,34 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 		return fmt.Errorf("read payload file: %w", err)
 	}
 
-	now := time.Now().UTC().Unix()
-	payloadHash := hashBytesHex(payload)
-	initialPrev := zeroHashHex()
-
 	packet := RelayPacket{
 		SessionID:     sessionIDBytes32Hex(req.SessionID),
 		Step:          1,
 		From:          e.myAddress,
 		To:            nextHop(req.RouteAddresses, 0),
 		Payload:       payload,
-		PayloadHash:   payloadHash,
-		PrevChainHash: initialPrev,
+		PayloadHash:   hashBytesHex(payload),
+		PrevChainHash: zeroHashHex(),
 		LocalNonce:    1,
 		Meta:          copyMap(req.Meta),
-		TimestampUnix: now,
+		TimestampUnix: time.Now().UTC().Unix(),
 	}
 
-	newChainHash, sig, pubKey, err := e.signPacket(packet)
+	chainHash, sig, pubKey, err := e.signPacket(packet)
 	if err != nil {
 		return fmt.Errorf("sign initial packet: %w", err)
 	}
-	packet.ChainHash = newChainHash
+
+	packet.ChainHash = chainHash
 	packet.Signature = sig
 	packet.PubKey = pubKey
 
 	if e.ethClient != nil {
-		if err := e.ethClient.CreateSession(ctx, eth.CreateSessionRequest{
+		creator, ok := e.ethClient.(OnChainSessionCreator)
+		if !ok {
+			return errors.New("create session on chain: eth client does not implement CreateSession")
+		}
+		if err := creator.CreateSession(ctx, eth.CreateSessionRequest{
 			SessionID:   packet.SessionID,
 			Route:       normalizeRoute(req.RouteAddresses),
 			PayloadHash: packet.PayloadHash,
@@ -172,9 +194,12 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 			return fmt.Errorf("create session on chain: %w", err)
 		}
 	}
-
 	if err := e.submitOnChain(ctx, packet); err != nil {
 		return fmt.Errorf("submit initial packet on chain: %w", err)
+	}
+
+	if err := e.persistSessionProgress(packet); err != nil {
+		return fmt.Errorf("persist initial session progress: %w", err)
 	}
 
 	if packet.To != "" && e.relayClient != nil && e.nextAgentURL != "" {
@@ -185,11 +210,12 @@ func (e *Engine) InitSessionAndRelay(ctx context.Context, req InitSessionRequest
 
 	if e.logger != nil {
 		e.logger.Info("initial session relayed",
-			"session_id", req.SessionID,
+			"session_id", packet.SessionID,
 			"step", packet.Step,
 			"to", packet.To,
 		)
 	}
+
 	return nil
 }
 
@@ -198,6 +224,11 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 
 	if err := e.validateIncomingPacket(pkt); err != nil {
 		return nil, err
+	}
+
+	packetKey := processedPacketKey(pkt)
+	if e.store != nil && e.store.HasProcessedPacket(packetKey) {
+		return nil, fmt.Errorf("replay detected: packet already processed: %s", packetKey)
 	}
 
 	if e.enablePayloadCompare {
@@ -210,7 +241,6 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 	if err := e.verifyPreviousProof(pkt); err != nil {
 		return nil, fmt.Errorf("verify previous proof: %w", err)
 	}
-
 	if err := e.markReplayOnce(pkt); err != nil {
 		return nil, err
 	}
@@ -242,25 +272,14 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 		return nil, fmt.Errorf("submit on chain: %w", err)
 	}
 
-	// Session Recovery: 온체인 제출까지 성공한 packet만 정상 상태로 저장
 	if e.store != nil {
-		if err := e.store.SetSessionState(store.SessionState{
-			SessionID:     newPacket.SessionID,
-			LastValidStep: uint64(newPacket.Step),
-			LastChainHash: newPacket.ChainHash,
-		}); err != nil {
-			return nil, fmt.Errorf("save session state: %w", err)
+		if err := e.store.MarkProcessedPacket(packetKey); err != nil {
+			return nil, fmt.Errorf("mark processed packet: %w", err)
 		}
+	}
 
-		if newPacket.Step%10 == 0 {
-			if err := e.store.SetCheckpoint(store.SessionCheckpoint{
-				SessionID: newPacket.SessionID,
-				Step:      uint64(newPacket.Step),
-				ChainHash: newPacket.ChainHash,
-			}); err != nil {
-				return nil, fmt.Errorf("save checkpoint: %w", err)
-			}
-		}
+	if err := e.persistSessionProgress(newPacket); err != nil {
+		return nil, fmt.Errorf("persist session progress: %w", err)
 	}
 
 	forwarded := false
@@ -282,7 +301,7 @@ func (e *Engine) ProcessRelay(ctx context.Context, req ProcessRelayRequest) (*Pr
 
 	return &ProcessRelayResponse{
 		OK:           true,
-		SessionID:    pkt.SessionID,
+		SessionID:    normalizeHex(pkt.SessionID),
 		AcceptedStep: newPacket.Step,
 		NewChainHash: newPacket.ChainHash,
 		Forwarded:    forwarded,
@@ -323,16 +342,30 @@ func (e *Engine) validateIncomingPacket(pkt RelayPacket) error {
 	if strings.TrimSpace(pkt.ChainHash) == "" {
 		return errors.New("chain_hash is required")
 	}
+	if pkt.LocalNonce == 0 {
+		return errors.New("local_nonce must be > 0")
+	}
 	if len(pkt.Signature) == 0 {
 		return errors.New("signature is required")
 	}
 	if len(pkt.PubKey) == 0 {
 		return errors.New("pub_key is required")
 	}
+
 	return nil
 }
 
 func (e *Engine) verifyPreviousProof(pkt RelayPacket) error {
+	if e.hppkSigner == nil {
+		return errors.New("hppk signer is nil")
+	}
+
+	if e.keyRegistry != nil {
+		if !e.keyRegistry.IsPublicKeyAllowed(normalizeHex(pkt.From), pkt.PubKey) {
+			return fmt.Errorf("public key is not registered for sender: %s", normalizeHex(pkt.From))
+		}
+	}
+
 	recomputed, err := computeChainHash(
 		pkt.SessionID,
 		pkt.Step,
@@ -363,19 +396,11 @@ func (e *Engine) verifyPreviousProof(pkt RelayPacket) error {
 	return nil
 }
 
-func (e *Engine) resolveNextHop(pkt RelayPacket) string {
-	if e.nextAgentURL == "" {
-		return ""
-	}
-	if pkt.Meta != nil {
-		if v := normalizeHex(pkt.Meta["next_address"]); v != "" && v != e.myAddress {
-			return v
-		}
-	}
-	return ""
-}
-
 func (e *Engine) signPacket(pkt RelayPacket) (chainHashHex string, sig []byte, pubKey []byte, err error) {
+	if e.hppkSigner == nil {
+		return "", nil, nil, errors.New("hppk signer is nil")
+	}
+
 	chainHashHex, err = computeChainHash(
 		pkt.SessionID,
 		pkt.Step,
@@ -425,12 +450,93 @@ func (e *Engine) submitOnChain(ctx context.Context, pkt RelayPacket) error {
 		TimestampUnix: pkt.TimestampUnix,
 		Meta:          pkt.Meta,
 	}
-
 	return e.ethClient.SubmitHop(ctx, req)
 }
 
+func (e *Engine) persistSessionProgress(pkt RelayPacket) error {
+	if e.store == nil {
+		return nil
+	}
+
+	if err := e.store.SetSessionState(store.SessionState{
+		SessionID:     normalizeHex(pkt.SessionID),
+		LastValidStep: uint64(pkt.Step),
+		LastChainHash: normalizeHex(pkt.ChainHash),
+	}); err != nil {
+		return err
+	}
+
+	if pkt.Step > 0 && pkt.Step%checkpointInterval == 0 {
+		if err := e.store.SetCheckpoint(store.SessionCheckpoint{
+			SessionID: normalizeHex(pkt.SessionID),
+			Step:      uint64(pkt.Step),
+			ChainHash: normalizeHex(pkt.ChainHash),
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (e *Engine) resolveNextHop(pkt RelayPacket) string {
+	if e.nextAgentURL == "" {
+		return ""
+	}
+	if pkt.Meta != nil {
+		if v := normalizeHex(pkt.Meta["next_address"]); v != "" && v != e.myAddress {
+			return v
+		}
+	}
+	return ""
+}
+func (e *Engine) markReplayOnce(pkt RelayPacket) error {
+	key := processedPacketKey(pkt)
+
+	e.replayMu.Lock()
+	defer e.replayMu.Unlock()
+
+	if e.replayCache == nil {
+		e.replayCache = make(map[string]struct{})
+	}
+
+	if _, ok := e.replayCache[key]; ok {
+		return fmt.Errorf("replay rejected: %s", key)
+	}
+
+	e.replayCache[key] = struct{}{}
+	return nil
+}
 func processedPacketKey(pkt RelayPacket) string {
 	return fmt.Sprintf("%s:%d:%d", normalizeHex(pkt.SessionID), pkt.Step, pkt.LocalNonce)
+}
+
+func normalizeRoute(route []string) []string {
+	out := make([]string, 0, len(route))
+	for _, addr := range route {
+		addr = normalizeHex(addr)
+		if addr != "" {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
+func sessionIDBytes32Hex(sessionID string) string {
+	s := strings.TrimSpace(sessionID)
+	if s == "" {
+		return zeroHashHex()
+	}
+
+	n := normalizeHex(s)
+	hexPart := strings.TrimPrefix(n, "0x")
+	if len(hexPart) == 64 {
+		if _, err := hex.DecodeString(hexPart); err == nil {
+			return n
+		}
+	}
+
+	return ethcrypto.Keccak256Hash([]byte(s)).Hex()
 }
 
 func nextHop(route []string, idx int) string {
@@ -532,6 +638,7 @@ func canonicalMeta(meta map[string]string) string {
 	if len(meta) == 0 {
 		return ""
 	}
+
 	keys := make([]string, 0, len(meta))
 	for k := range meta {
 		keys = append(keys, k)
@@ -547,6 +654,7 @@ func canonicalMeta(meta map[string]string) string {
 		b.WriteString("=")
 		b.WriteString(meta[k])
 	}
+
 	return b.String()
 }
 
@@ -555,6 +663,7 @@ func hashMetaToBytes32(meta map[string]string) [32]byte {
 	if len(meta) == 0 {
 		return out
 	}
+
 	hash := ethcrypto.Keccak256Hash([]byte(canonicalMeta(meta)))
 	copy(out[:], hash.Bytes())
 	return out
@@ -596,7 +705,6 @@ func newBigIntFromString(s string) interface{} {
 	return n.Int
 }
 
-// big.Int import를 최소 변경으로 감싸기 위한 래퍼
 type bigInt struct {
 	Int *big.Int
 }
@@ -607,50 +715,4 @@ func (b *bigInt) SetString(s string, base int) {
 		n = big.NewInt(0)
 	}
 	b.Int = n
-}
-
-func (e *Engine) markReplayOnce(pkt RelayPacket) error {
-	key := processedPacketKey(pkt)
-
-	e.replayMu.Lock()
-	defer e.replayMu.Unlock()
-
-	if e.replayCache == nil {
-		e.replayCache = make(map[string]struct{})
-	}
-
-	if _, ok := e.replayCache[key]; ok {
-		return fmt.Errorf("replay rejected: %s", key)
-	}
-
-	e.replayCache[key] = struct{}{}
-	return nil
-}
-
-func sessionIDBytes32Hex(sessionID string) string {
-	s := strings.TrimSpace(sessionID)
-	if s == "" {
-		return zeroHashHex()
-	}
-
-	n := normalizeHex(s)
-	hexPart := strings.TrimPrefix(n, "0x")
-	if len(hexPart) == 64 {
-		if _, err := hex.DecodeString(hexPart); err == nil {
-			return n
-		}
-	}
-
-	return ethcrypto.Keccak256Hash([]byte(s)).Hex()
-}
-
-func normalizeRoute(route []string) []string {
-	out := make([]string, 0, len(route))
-	for _, addr := range route {
-		addr = normalizeHex(addr)
-		if addr != "" {
-			out = append(out, addr)
-		}
-	}
-	return out
 }

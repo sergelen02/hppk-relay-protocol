@@ -13,8 +13,8 @@ import (
 func loadRealHPPKSigner(t *testing.T) *realhppk.Signer {
 	t.Helper()
 
-	publicKeyPath := os.Getenv("HPPK_PUBLIC_KEY_PATH")
-	secretKeyPath := os.Getenv("HPPK_SECRET_KEY_PATH")
+	publicKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_pub.key")
+	secretKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_sec.key")
 
 	if publicKeyPath == "" {
 		t.Fatal("HPPK_PUBLIC_KEY_PATH is required")
@@ -24,12 +24,13 @@ func loadRealHPPKSigner(t *testing.T) *realhppk.Signer {
 	}
 
 	signer, err := realhppk.NewSigner(realhppk.SignerConfig{
-		PublicKeyPath:  publicKeyPath,
-		SecretKeyPath:  secretKeyPath,
+		PublicKeyPath: publicKeyPath,
+		SecretKeyPath: secretKeyPath,
 		AlgorithmName:  "HPPK",
 		EnableVerify:   true,
 		StrictKeyCheck: true,
 	})
+
 	if err != nil {
 		t.Fatalf("create real HPPK signer: %v", err)
 	}
@@ -86,16 +87,20 @@ func makeRealHPPKPacket(
 	}
 
 	packet := RelayPacket{
-		SessionID:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Step:          step,
-		From:          "0x1111111111111111111111111111111111111111",
-		To:            "0x2222222222222222222222222222222222222222",
+		SessionID:
+			"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Step: step,
+		From:
+			"0x1111111111111111111111111111111111111111",
+		To:
+			"0x2222222222222222222222222222222222222222",
 		Payload:       payload,
 		PayloadHash:   hashBytesHex(payload),
 		PrevChainHash: prevChainHash,
 		LocalNonce:    nonce,
 		Meta: map[string]string{
-			"next_address": "0x3333333333333333333333333333333333333333",
+			"next_address":
+				"0x3333333333333333333333333333333333333333",
 		},
 		TimestampUnix: time.Now().UTC().Unix(),
 	}

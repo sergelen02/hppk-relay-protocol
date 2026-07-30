@@ -125,8 +125,8 @@ func loadRealBenchmarkSigner(
 ) *realhppk.Signer {
 	b.Helper()
 
-	publicKeyPath := os.Getenv("HPPK_PUBLIC_KEY_PATH")
-	secretKeyPath := os.Getenv("HPPK_SECRET_KEY_PATH")
+	publicKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_pub.key")
+	secretKeyPath := os.Getenv("/home/seegii/다운로드/hppk-relay-protocol/keys/hppk_sec.key")
 
 	if publicKeyPath == "" {
 		b.Fatal("HPPK_PUBLIC_KEY_PATH is required")
