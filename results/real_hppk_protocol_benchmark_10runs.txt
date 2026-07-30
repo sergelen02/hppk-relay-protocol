@@ -1,0 +1,106 @@
+goos: linux
+goarch: amd64
+pkg: github.com/sergelen02/hppk-relay-protocol/agent/internal/protocol
+cpu: 13th Gen Intel(R) Core(TM) i7-13620H
+BenchmarkRealHPPKSign32Bytes-16              	  420207	      8670 ns/op	   3.69 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  479450	      8046 ns/op	   3.98 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  517791	      7875 ns/op	   4.06 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  483298	      8134 ns/op	   3.93 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  448538	      7837 ns/op	   4.08 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  441100	      7605 ns/op	   4.21 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  456842	      7418 ns/op	   4.31 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  467568	      7415 ns/op	   4.32 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  423913	      7432 ns/op	   4.31 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKSign32Bytes-16              	  547875	      7072 ns/op	   4.52 MB/s	    4006 B/op	      61 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  261783	     11865 ns/op	   2.70 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  331623	     11601 ns/op	   2.76 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  274501	     11985 ns/op	   2.67 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  263364	     12173 ns/op	   2.63 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  281701	     11900 ns/op	   2.69 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  274219	     11796 ns/op	   2.71 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  283677	     12098 ns/op	   2.64 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  344544	     11689 ns/op	   2.74 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  301024	     11529 ns/op	   2.78 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKVerify32Bytes-16            	  279286	     11850 ns/op	   2.70 MB/s	    3706 B/op	      77 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1623 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1551 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1554 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1473 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1518 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1571 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1775 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1721 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1638 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKPublicKeySize-16            	1000000000	         0.1509 ns/op	       638.0 public_key_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1569 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1435 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1496 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1409 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1437 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1455 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1438 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1469 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1436 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkRealHPPKSignatureSize-16            	1000000000	         0.1429 ns/op	       181.0 signature_bytes	       0 B/op	       0 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   57214	     64989 ns/op	   0.49 MB/s	   33952 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   54964	     63486 ns/op	   0.50 MB/s	   33896 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   55278	     67200 ns/op	   0.48 MB/s	   33964 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   47923	     65360 ns/op	   0.49 MB/s	   33923 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   55078	     60923 ns/op	   0.53 MB/s	   33860 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   53156	     66241 ns/op	   0.48 MB/s	   33910 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   58671	     58959 ns/op	   0.54 MB/s	   34028 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   54903	     61139 ns/op	   0.52 MB/s	   33905 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   53082	     58902 ns/op	   0.54 MB/s	   33894 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK32Bytes-16      	   51044	     66728 ns/op	   0.48 MB/s	   33884 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   54528	     62991 ns/op	   2.03 MB/s	   33950 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   52455	     62650 ns/op	   2.04 MB/s	   33974 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   53944	     62846 ns/op	   2.04 MB/s	   33951 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   52478	     62203 ns/op	   2.06 MB/s	   33952 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   53062	     61864 ns/op	   2.07 MB/s	   33949 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   53492	     60794 ns/op	   2.11 MB/s	   33950 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   54519	     61504 ns/op	   2.08 MB/s	   33970 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   53274	     60556 ns/op	   2.11 MB/s	   33965 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   54891	     62609 ns/op	   2.04 MB/s	   33964 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK128Bytes-16     	   54620	     60718 ns/op	   2.11 MB/s	   33964 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   52864	     62961 ns/op	   8.13 MB/s	   34367 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   46267	     66401 ns/op	   7.71 MB/s	   34435 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   51453	     63459 ns/op	   8.07 MB/s	   34346 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   50044	     64174 ns/op	   7.98 MB/s	   34364 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   50962	     61954 ns/op	   8.26 MB/s	   34360 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   44337	     70557 ns/op	   7.26 MB/s	   34460 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   56924	     62542 ns/op	   8.19 MB/s	   34435 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   53654	     64346 ns/op	   7.96 MB/s	   34380 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   50676	     61923 ns/op	   8.27 MB/s	   34447 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK512Bytes-16     	   52948	     62882 ns/op	   8.14 MB/s	   34367 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   48202	     69223 ns/op	  14.79 MB/s	   34913 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   50208	     73281 ns/op	  13.97 MB/s	   34930 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   52359	     70307 ns/op	  14.56 MB/s	   34916 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   44341	     75113 ns/op	  13.63 MB/s	   35025 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   47785	     69478 ns/op	  14.74 MB/s	   34913 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   39306	     79498 ns/op	  12.88 MB/s	   35093 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   42130	     72217 ns/op	  14.18 MB/s	   35014 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   42566	     72832 ns/op	  14.06 MB/s	   34998 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   44974	     70864 ns/op	  14.45 MB/s	   34981 B/op	     479 allocs/op
+BenchmarkProcessRelayRealHPPK1024Bytes-16    	   45456	     70603 ns/op	  14.50 MB/s	   34963 B/op	     479 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   67352	     54445 ns/op	   21566 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   67886	     57479 ns/op	   21584 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   66680	     51472 ns/op	   21588 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   66243	     55923 ns/op	   21592 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   77468	     46915 ns/op	   21576 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   65917	     49312 ns/op	   21574 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   76935	     50621 ns/op	   21569 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   66163	     51806 ns/op	   21584 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   55862	     58797 ns/op	   21574 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKForgedSignature-16    	   76872	     50223 ns/op	   21592 B/op	     316 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	  103158	     33474 ns/op	   10753 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	  116050	     33653 ns/op	   10766 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	   97588	     35673 ns/op	   10807 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	  102308	     34666 ns/op	   10781 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	  102390	     33551 ns/op	   10802 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	   91256	     33641 ns/op	   10769 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	   98985	     36417 ns/op	   10814 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	  100478	     32679 ns/op	   10834 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	   95775	     32575 ns/op	   10833 B/op	     173 allocs/op
+BenchmarkRejectRealHPPKReplay-16             	  104721	     33543 ns/op	   10826 B/op	     173 allocs/op
+PASS
+ok  	github.com/sergelen02/hppk-relay-protocol/agent/internal/protocol	578.839s
