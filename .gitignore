@@ -1,4 +1,17 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
 keys/
 *.key
-sk.json
-sk_kem.json
+*.pem
+*.seed
+sk*.json
+
+# Local experiment state and outputs
+data/*.json
+results/phase-a/
+
+# Local Go workspace for HPPK_2 development
+go.work
+go.work.sum
